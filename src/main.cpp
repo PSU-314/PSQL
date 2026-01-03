@@ -1,4 +1,5 @@
 #include "../include/main.h"
+#include "../include/lexer.h"
 
 static std::string trimString(const std::string& s){
     int a = s.find_first_not_of(" \t\r\n");
@@ -29,6 +30,9 @@ void processInput(std::string& buffer){
     if(cmd[0] == '.'){
         handleMetaCommand(cmd);
     }
+
+    std::vector<Token> tokens;
+    tokenize(cmd, tokens);
 }
 
 void print(const std::string& output, const int type){
@@ -36,7 +40,7 @@ void print(const std::string& output, const int type){
         std::cout << output << std::flush;
     }
     else if(type == 1){
-        std::cerr << output << std::flush;
+        std::cerr << "Error: " << output << std::flush;
     }
 }
 
