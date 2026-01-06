@@ -1,5 +1,5 @@
 #include "../include/lexer.h"
-#include "../include/main.h"
+#include <stdexcept>
 #include <vector>
 
 const std::unordered_set<std::string> psql_keywords =
@@ -31,6 +31,11 @@ void tokenize(const std::string& cmd, std::vector<Token>& tokens){
             curr++;
             continue;
         }
+        if(c == ';'){
+            tokens.push_back({SEMIC, ";"});
+            curr++;
+            return;
+        }
         if(c == '\''){
             std::string word;
             bool isEnclosed = false;
@@ -49,7 +54,7 @@ void tokenize(const std::string& cmd, std::vector<Token>& tokens){
                 }
             }
             if(isEnclosed) continue;
-            else print("Missing (') enclosing character.", 1);            
+            else throw std::runtime_error("Missing (') enclosing character.\n");            
         }
 
         if(isalpha(c)){
@@ -90,4 +95,6 @@ void tokenize(const std::string& cmd, std::vector<Token>& tokens){
         tokens.push_back({SYMBOL, std::string(1, c)});
         curr++;
     }
+
+    throw std::runtime_error("Missing semicolon.\n");
 }

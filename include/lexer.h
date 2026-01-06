@@ -18,6 +18,7 @@ enum TOKEN_ID{
     RPARA,
     LPARA,
     COMMA,
+    SEMIC
 };
 
 struct Token{

@@ -1,5 +1,7 @@
 #include "../include/main.h"
 #include "../include/lexer.h"
+#include "../include/parser.h"
+#include <stdexcept>
 
 static std::string trimString(const std::string& s){
     int a = s.find_first_not_of(" \t\r\n");
@@ -32,7 +34,15 @@ void processInput(std::string& buffer){
     }
 
     std::vector<Token> tokens;
-    tokenize(cmd, tokens);
+    psqlStatement stmt;
+    Parser P;
+    try{
+        tokenize(cmd, tokens);
+        P.parse(tokens, stmt);
+    }
+    catch(const std::runtime_error& e){
+        print(e.what(), 1);
+    }
 }
 
 void print(const std::string& output, const int type){
