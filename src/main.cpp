@@ -1,7 +1,10 @@
 #include "../include/main.h"
 #include "../include/lexer.h"
 #include "../include/parser.h"
+#include "../include/executor.h"
 #include <stdexcept>
+
+static Executor E;
 
 static std::string trimString(const std::string& s){
     int a = s.find_first_not_of(" \t\r\n");
@@ -39,6 +42,7 @@ void processInput(std::string& buffer){
     try{
         tokenize(cmd, tokens);
         P.parse(tokens, stmt);
+        E.execute(stmt);
     }
     catch(const std::runtime_error& e){
         print(e.what(), 1);
