@@ -42,10 +42,12 @@ void Parser::handleCreate(const std::vector<Token>& tokens, psqlStatement& stmt)
 
 
     while(cursor(tokens).type != SEMIC){
-        move(tokens);
-        if(cursor(tokens).type == SEMIC){
-            throw std::runtime_error("Missing right parenthesis.\n");
+        if(cursor(tokens).type == RPARA){
+            move(tokens);
+            if(cursor(tokens).type == SEMIC) break;
+            else throw std::runtime_error("Expected ; right after ).\n");
         }
+        move(tokens);
         if(cursor(tokens).type != IDENTIFIER){
             throw std::runtime_error("Missing column name.\n");
         }
@@ -56,6 +58,10 @@ void Parser::handleCreate(const std::vector<Token>& tokens, psqlStatement& stmt)
         bool f1 = true, f2 = true, f3 = false;
 
         while(cursor(tokens).type != COMMA && cursor(tokens).type != RPARA){
+
+            if(cursor(tokens).type == SEMIC){
+                throw std::runtime_error("Missing right parenthesis.\n");
+            }
             if(cursor(tokens).type != KEYWORD){
                 throw std::runtime_error(cursor(tokens).value + " is not a keyword.\n");
             }

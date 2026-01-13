@@ -6,7 +6,7 @@
 #include <unordered_map>
 #include <string>
 
-class Executor {
+class Executor{
 private:
     std::unordered_map<std::string, Table*> tableList;
     void executeCreate(createStatement* args);

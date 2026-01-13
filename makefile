@@ -25,7 +25,7 @@ $(OBJ_DIR):
 
 clean:
 	@echo "Cleaning up..."
-	@rm -rf $(OBJ_DIR) $(BIN_NAME)
+	@rm -rf $(OBJ_DIR) $(BIN_NAME) $(wildcard *.db)
 	@echo "Clean complete."
 
 .PHONY: all clean
