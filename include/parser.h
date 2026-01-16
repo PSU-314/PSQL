@@ -12,7 +12,7 @@ enum Type{
     NONE
 };
 
-enum Commands{C_CREATE};
+enum Commands{C_CREATE, C_INSERT};
 
 struct Item{
     Type type;
@@ -41,6 +41,11 @@ struct createStatement : public statement{
     std::vector<Attribute> attributes;
 };
 
+struct insertStatement : public statement{
+    std::string tableName;
+    std::vector<std::string> values;
+};
+
 struct psqlStatement{
     Commands type;
     std::unique_ptr<statement> args;
@@ -54,6 +59,7 @@ private:
     Token move(const std::vector<Token>&);
 
     void handleCreate(const std::vector<Token>&, psqlStatement& );
+    void handleInsert(const std::vector<Token>&, psqlStatement& );
 
 public:
     Parser();

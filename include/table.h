@@ -25,6 +25,7 @@ public:
     std::string name;
     Pager* pager;
     uint32_t rowSize;
+    uint32_t numRows;
     std::vector<std::string> orderedCol;
     std::unordered_map<std::string, colInfo*> lookup;
 

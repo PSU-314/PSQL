@@ -121,6 +121,63 @@ void Parser::handleCreate(const std::vector<Token>& tokens, psqlStatement& stmt)
     stmt.args = std::move(args);
 }
 
+void Parser::handleInsert(const std::vector<Token>& tokens, psqlStatement& stmt){
+    move(tokens);
+
+    if(cursor(tokens).type != KEYWORD || cursor(tokens).value != "into"){
+        throw std::runtime_error("Missing 'into' keyword.\n");
+    }
+    move(tokens);
+
+    if(cursor(tokens).type != IDENTIFIER){
+        throw std::runtime_error("Missing table name.\n");
+    }
+    
+    auto args = std::make_unique<insertStatement>();
+    args->tableName = cursor(tokens).value;
+    move(tokens);
+
+    if(cursor(tokens).type != KEYWORD || cursor(tokens).value != "values"){
+        throw std::runtime_error("Missing 'values' keyword.\n");
+    }
+    move(tokens);
+
+    if(cursor(tokens).type != LPARA){
+        throw std::runtime_error("Expected '(' opening values list.\n");
+    }
+    move(tokens);
+
+    while(cursor(tokens).type != RPARA && cursor(tokens).type != SEMIC){
+        TOKEN_ID t = cursor(tokens).type;
+        if(t != INT_LIT && t != FLOAT_LIT && t != STRING_LIT && t != CHAR_LIT && t != IDENTIFIER){
+            throw std::runtime_error("Invalid literal value in insert list.\n");
+        }
+        
+        args->values.push_back(cursor(tokens).value);
+        move(tokens);
+
+        if(cursor(tokens).type == COMMA){
+            move(tokens);
+        } 
+        else if(cursor(tokens).type != RPARA){
+            throw std::runtime_error("Expected ',' or ')' in values list.\n");
+        }
+    }
+
+    if(cursor(tokens).type != RPARA){
+        throw std::runtime_error("Missing closing parenthesis ')' for values.\n");
+    }
+    move(tokens);
+
+    if(cursor(tokens).type != SEMIC){
+        throw std::runtime_error("Missing trailing semicolon ';'.\n");
+    }
+    move(tokens);
+
+    stmt.type = C_INSERT;
+    stmt.args = std::move(args);
+}
+
 Parser::Parser(){
     current = 0;
 }
@@ -128,6 +185,7 @@ Parser::Parser(){
 void Parser::parse(std::vector<Token> tokens, psqlStatement& stmt){
     if(cursor(tokens).type == KEYWORD){
         if(cursor(tokens).value == "create") handleCreate(tokens, stmt);
+        else if (cursor(tokens).value == "insert") handleInsert(tokens, stmt);
     }
     else{
         throw std::runtime_error(cursor(tokens).value + " is not an operation.\n");

@@ -4,7 +4,8 @@
 
 const std::unordered_set<std::string> psql_keywords =
         {"create", "table", "int", "float",
-            "char", "string"};
+            "char", "string", "insert","into", 
+            "values"};
 
 void tokenize(const std::string& cmd, std::vector<Token>& tokens){
     int curr = 0, length = cmd.size();

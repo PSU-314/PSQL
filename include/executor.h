@@ -10,6 +10,7 @@ class Executor{
 private:
     std::unordered_map<std::string, Table*> tableList;
     void executeCreate(createStatement* args);
+    void executeInsert(insertStatement* args);
 
 public:
     Executor();
