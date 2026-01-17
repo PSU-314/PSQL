@@ -34,6 +34,7 @@ void processInput(std::string& buffer){
 
     if(cmd[0] == '.'){
         handleMetaCommand(cmd);
+        return;
     }
 
     std::vector<Token> tokens;

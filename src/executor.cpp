@@ -82,16 +82,31 @@ void Executor::executeInsert(insertStatement* args){
         char* writeDest = rowSlot + col->offset;
 
         if(col->type == INT){
-            int val = std::stoi(rawVal);
-            std::memcpy(writeDest, &val, col->size);
+            try{
+                int val = std::stoi(rawVal);
+                std::memcpy(writeDest, &val, col->size);
+            }
+            catch(std::invalid_argument){
+                throw std::runtime_error("Expected integer.\n");
+            }
         } 
         else if(col->type == FLOAT){
-            float val = std::stof(rawVal);
-            std::memcpy(writeDest, &val, col->size);
+            try{
+                float val = std::stof(rawVal);
+                std::memcpy(writeDest, &val, col->size);
+            }
+            catch(std::invalid_argument){
+                throw std::runtime_error("Expected float.\n");
+            }
         } 
         else if(col->type == CHAR || col->type == STRING){
-            std::memset(writeDest, 0, col->size);
-            std::strncpy(writeDest, rawVal.c_str(), col->size - 1);
+            try{
+                std::memset(writeDest, 0, col->size);
+                std::strncpy(writeDest, rawVal.c_str(), col->size - 1);
+            }
+            catch(std::invalid_argument){
+                throw std::runtime_error("Expected char/string");
+            }
         }
     }
 
