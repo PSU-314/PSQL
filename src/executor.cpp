@@ -18,6 +18,9 @@ void Executor::execute(psqlStatement& stmt){
     else if(stmt.type == C_INSERT){
         executeInsert(static_cast<insertStatement*>(stmt.args.get()));
     }
+    else if(stmt.type == C_SELECT){
+        executeSelect(static_cast<selectStatement*>(stmt.args.get()));
+    }
 }
 
 void Executor::executeCreate(createStatement* args){
@@ -116,6 +119,64 @@ void Executor::executeInsert(insertStatement* args){
     std::free(page);
 
     std::cout << "Inserted a row.\n";
+}
+
+void Executor::executeSelect(selectStatement* args){
+    if(!args) return;
+
+    if(tableList.find(args->tableName) == tableList.end()){
+        throw std::runtime_error("Table does not exist.\n");
+        return;
+    }
+
+    Table* table = tableList[args->tableName];
+
+    if(table->numRows == 0){
+        print("No rows selected.\n", 0);
+        return;
+    }
+
+    for(size_t i = 0; i < table->orderedCol.size(); i++){
+        std::cout << table->orderedCol[i];
+        if(i < table->orderedCol.size() - 1) std::cout << " | ";
+    }
+    print("\n" + std::string(40, '-') + "\n", 0);
+
+    void* page = table->pager->getPage(0);
+    if(!page){
+        throw std::runtime_error("Failed to read page from database disk memory.\n");
+    }
+
+    char* pageBytes = static_cast<char*>(page);
+
+    for(uint32_t r = 0; r < table->numRows; r++){
+        char* rowSlot = pageBytes + (r * table->rowSize);
+
+        for(size_t i = 0; i < table->orderedCol.size(); i++){
+            std::string colName = table->orderedCol[i];
+            colInfo* col = table->lookup.at(colName);
+            void* fieldAddr = rowSlot + col->offset;
+
+            if(col->type == INT){
+                int32_t v;
+                std::memcpy(&v, fieldAddr, col->size);
+                print(std::to_string(v), 0);
+            }
+            else if(col->type == FLOAT){
+                float v;
+                std::memcpy(&v, fieldAddr, col->size);
+                print(std::to_string(v), 0);
+            } 
+            else{
+                std::cout << static_cast<char*>(fieldAddr);
+            }
+
+            if(i < table->orderedCol.size() - 1) std::cout << " | ";
+        }
+        print("\n", 0);
+    }
+
+    std::free(page);
 }
 
 void Executor::shutdown(){

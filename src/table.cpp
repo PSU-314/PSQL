@@ -40,4 +40,5 @@ void Table::calculateRowLayout(){
         currentOffset += col->size;
     }
     rowSize = currentOffset;
+    std::cout<<rowSize<<std::endl;
 }

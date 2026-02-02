@@ -11,6 +11,7 @@ private:
     std::unordered_map<std::string, Table*> tableList;
     void executeCreate(createStatement* args);
     void executeInsert(insertStatement* args);
+    void executeSelect(selectStatement* args);
 
 public:
     Executor();

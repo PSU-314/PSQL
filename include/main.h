@@ -5,7 +5,7 @@
 #include <string>
 #include <algorithm>
 
-void input(std::string& );
+bool input(std::string& );
 void processInput(std::string& );
 void print(const std::string& , const int type); // type = 0 for stdout = 1 for stderr
 

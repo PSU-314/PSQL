@@ -25,8 +25,8 @@ void handleMetaCommand(const std::string& cmd){
     }
 }
 
-void input(std::string& buffer){
-    std::getline(std::cin, buffer);
+bool input(std::string& buffer){
+    return bool(std::getline(std::cin, buffer));
 }
 
 void processInput(std::string& buffer){
@@ -63,7 +63,7 @@ int main(){
     std::string buffer;
     while(true){
         print("psql >> ", 0);
-        input(buffer);
+        if(!input(buffer)) break;
         if(buffer.empty()) continue;
         processInput(buffer);
     }
