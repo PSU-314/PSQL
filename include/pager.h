@@ -15,7 +15,7 @@ private:
     uint32_t fileLength;
 
 public:
-    Pager(const std::string& filename);
+    Pager(const std::string& filename, const std::string& dir);
     ~Pager();
 
     void* getPage(uint32_t pageNum);

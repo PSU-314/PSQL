@@ -29,7 +29,7 @@ public:
     std::vector<std::string> orderedCol;
     std::unordered_map<std::string, colInfo*> lookup;
 
-    Table(const std::string& tableName, const std::string& dbFileName);
+    Table(const std::string& tableName, const std::string& dbFileName, const std::string& dir);
     ~Table();
     
     void calculateRowLayout();

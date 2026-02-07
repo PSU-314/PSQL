@@ -1,11 +1,16 @@
 #include "../include/executor.h"
 #include "../include/main.h"
 #include "../include/pager.h"
+#include "../include/catalog.h"
 #include <stdexcept>
 #include <string>
 #include <cstring>
 
-Executor::Executor(){}
+static Catalog catalog("catalog.meta", "data");
+
+Executor::Executor(){
+    catalog.loadCatalog(tableList);
+}
 
 Executor::~Executor(){
     shutdown();
@@ -31,7 +36,7 @@ void Executor::executeCreate(createStatement* args){
     }
 
     std::string dbFileName = args->tableName + ".db";
-    Table* newTable = new Table(args->tableName, dbFileName);
+    Table* newTable = new Table(args->tableName, dbFileName, "data");
 
 
     for(const auto& attr : args->attributes){
@@ -47,6 +52,8 @@ void Executor::executeCreate(createStatement* args){
     newTable->calculateRowLayout();
 
     tableList[args->tableName] = newTable;
+
+    catalog.saveCatalog(tableList);
 
     print("Table '" + args->tableName + "' created.\n", 0);
 }
@@ -116,9 +123,11 @@ void Executor::executeInsert(insertStatement* args){
     table->pager->setPage(0, page);
     table->numRows++;
 
+    catalog.saveCatalog(tableList);
+
     std::free(page);
 
-    std::cout << "Inserted a row.\n";
+    print("Inserted a row.\n", 0);
 }
 
 void Executor::executeSelect(selectStatement* args){
@@ -168,10 +177,10 @@ void Executor::executeSelect(selectStatement* args){
                 print(std::to_string(v), 0);
             } 
             else{
-                std::cout << static_cast<char*>(fieldAddr);
+                print(static_cast<char*>(fieldAddr), 0);
             }
 
-            if(i < table->orderedCol.size() - 1) std::cout << " | ";
+            if(i < table->orderedCol.size() - 1) print(" | ", 0);
         }
         print("\n", 0);
     }

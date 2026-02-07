@@ -1,9 +1,9 @@
 #include "../include/table.h"
 
-Table::Table(const std::string& tableName, const std::string& dbFileName){
+Table::Table(const std::string& tableName, const std::string& dbFileName, const std::string& dir){
     name = tableName;
     rowSize = 0;
-    pager = new Pager(dbFileName);
+    pager = new Pager(dbFileName, dir);
 }
 
 Table::~Table(){
@@ -40,5 +40,4 @@ void Table::calculateRowLayout(){
         currentOffset += col->size;
     }
     rowSize = currentOffset;
-    std::cout<<rowSize<<std::endl;
 }

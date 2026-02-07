@@ -2,15 +2,15 @@
 #include <cstdlib>
 #include <cstring>
 
-Pager::Pager(const std::string& filename) : filePath(filename), fileLength(0){
+Pager::Pager(const std::string& filename, const std::string& dir) : filePath(dir + '/' + filename), fileLength(0){
     
-    fileStream.open(filename, std::ios::in | std::ios::out | std::ios::binary);
+    fileStream.open(filePath, std::ios::in | std::ios::out | std::ios::binary);
 
     if(!fileStream.is_open()){
         fileStream.clear();
-        fileStream.open(filename, std::ios::out | std::ios::binary);
+        fileStream.open(filePath, std::ios::out | std::ios::binary);
         fileStream.close();
-        fileStream.open(filename, std::ios::in | std::ios::out | std::ios::binary);
+        fileStream.open(filePath, std::ios::in | std::ios::out | std::ios::binary);
     }
 
     if(!fileStream.is_open()){
