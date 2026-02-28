@@ -4,6 +4,7 @@
 #include "lexer.h"
 #include <memory>
 #include <string>
+#include <vector>
 
 enum Type{
     INT,
@@ -19,8 +20,6 @@ struct Item{
     Type type;
     std::string value;
 };
-
-static bool isLiteral(TOKEN_ID);
 
 struct Attribute{
     std::string ColName;

@@ -2,7 +2,7 @@
 #include <stdexcept>
 
 Token Parser::cursor(const std::vector<Token>& tokens){
-    if(current >= tokens.size()){
+    if(static_cast<size_t>(current) >= tokens.size()){
         return {SYMBOL, ""};
     }
     else{
@@ -11,7 +11,7 @@ Token Parser::cursor(const std::vector<Token>& tokens){
 }
 
 Token Parser::move(const std::vector<Token>& tokens){
-    if(current >= tokens.size()){
+    if(static_cast<size_t>(current) >= tokens.size()){
         return {SYMBOL, ""};
     }
     else{
@@ -55,7 +55,7 @@ void Parser::handleCreate(const std::vector<Token>& tokens, psqlStatement& stmt)
         Attribute A;
         A.ColName = cursor(tokens).value;
         move(tokens);
-        bool f1 = true, f2 = true, f3 = false;
+        bool f1 = true, f2 = true, f3 = true;
 
         while(cursor(tokens).type != COMMA && cursor(tokens).type != RPARA){
 

@@ -2,9 +2,15 @@
 #include "../include/main.h"
 #include "../include/pager.h"
 #include "../include/catalog.h"
+#include "../include/btree.h"
+#include "../include/cursor.h"
+#include "../include/node.h"
 #include <stdexcept>
 #include <string>
 #include <cstring>
+#include <cstdlib>
+#include <vector>
+#include <algorithm>
 
 static Catalog catalog("catalog.meta", "data");
 
@@ -38,18 +44,23 @@ void Executor::executeCreate(createStatement* args){
     std::string dbFileName = args->tableName + ".db";
     Table* newTable = new Table(args->tableName, dbFileName, "data");
 
+    try{
+        for(const auto& attr : args->attributes){
+            colInfo* col = new colInfo();
+            col->type = attr.type;
+            col->isPrimary = attr.isPrimary;
+            col->canHoldNull = attr.canHoldNull;
 
-    for(const auto& attr : args->attributes){
-        colInfo* col = new colInfo();
-        col->type = attr.type;
-        col->isPrimary = attr.isPrimary;
-        col->canHoldNull = attr.canHoldNull;
-        
-        newTable->orderedCol.push_back(attr.ColName);
-        newTable->lookup[attr.ColName] = col;
+            newTable->orderedCol.push_back(attr.ColName);
+            newTable->lookup[attr.ColName] = col;
+        }
+
+        newTable->calculateRowLayout();
     }
-
-    newTable->calculateRowLayout();
+    catch(...){
+        delete newTable;
+        throw;
+    }
 
     tableList[args->tableName] = newTable;
 
@@ -72,22 +83,13 @@ void Executor::executeInsert(insertStatement* args){
                                  " values, got " + std::to_string(args->values.size()) + ".\n");
     }
 
-    uint32_t currentOffset = table->numRows * table->rowSize;
-    if(currentOffset + table->rowSize > PAGE_SIZE){
-        throw std::runtime_error("Single-page storage capacity limit reached.\n");
-    }
-
-    void* page = table->pager->getPage(0);
-    if(!page){
-        throw std::runtime_error("Pager allocation failure.\n");
-    }
-
-    char* rowSlot = static_cast<char*>(page) + currentOffset;
+    std::vector<char> rowBuf(table->rowSize, 0);
+    char* rowSlot = rowBuf.data();
 
     for(size_t i = 0; i < table->orderedCol.size(); i++){
-        std::string colName = table->orderedCol[i];
+        const std::string& colName = table->orderedCol[i];
         colInfo* col = table->lookup[colName];
-        std::string rawVal = args->values[i];
+        const std::string& rawVal = args->values[i];
 
         char* writeDest = rowSlot + col->offset;
 
@@ -96,8 +98,11 @@ void Executor::executeInsert(insertStatement* args){
                 int val = std::stoi(rawVal);
                 std::memcpy(writeDest, &val, col->size);
             }
-            catch(std::invalid_argument){
-                throw std::runtime_error("Expected integer.\n");
+            catch(const std::invalid_argument&){
+                throw std::runtime_error("Expected integer for column '" + colName + "'.\n");
+            }
+            catch(const std::out_of_range&){
+                throw std::runtime_error("Integer out of range for column '" + colName + "'.\n");
             }
         } 
         else if(col->type == FLOAT){
@@ -105,27 +110,41 @@ void Executor::executeInsert(insertStatement* args){
                 float val = std::stof(rawVal);
                 std::memcpy(writeDest, &val, col->size);
             }
-            catch(std::invalid_argument){
-                throw std::runtime_error("Expected float.\n");
+            catch(const std::invalid_argument&){
+                throw std::runtime_error("Expected float for column '" + colName + "'.\n");
+            }
+            catch(const std::out_of_range&){
+                throw std::runtime_error("Float out of range for column '" + colName + "'.\n");
             }
         } 
         else if(col->type == CHAR || col->type == STRING){
-            try{
-                std::memset(writeDest, 0, col->size);
-                std::strncpy(writeDest, rawVal.c_str(), col->size - 1);
-            }
-            catch(std::invalid_argument){
-                throw std::runtime_error("Expected char/string");
+            std::memset(writeDest, 0, col->size);
+            if(col->size > 0){
+                size_t copyLen = std::min(rawVal.size(), static_cast<size_t>(col->size - 1));
+                std::memcpy(writeDest, rawVal.data(), copyLen);
+                writeDest[copyLen] = '\0';
             }
         }
     }
 
-    table->pager->setPage(0, page);
+    uint32_t key = table->numRows;
+    Cursor cursor = tableFind(table, key);
+
+    if(!cursor.EOT){
+        void* existingPage = table->pager->getPage(cursor.pageNum);
+        bool duplicate = (cursor.cellNum < *leafNodeNumCells(existingPage)) &&
+                          (*leafNodeKey(existingPage, cursor.cellNum, table->rowSize) == key);
+        std::free(existingPage);
+        if(duplicate){
+            throw std::runtime_error("Internal error: duplicate row key " + std::to_string(key) + ".\n");
+        }
+    }
+
+    insert_leaf_node(&cursor, key, rowSlot);
+
     table->numRows++;
 
     catalog.saveCatalog(tableList);
-
-    std::free(page);
 
     print("Inserted a row.\n", 0);
 }
@@ -135,7 +154,6 @@ void Executor::executeSelect(selectStatement* args){
 
     if(tableList.find(args->tableName) == tableList.end()){
         throw std::runtime_error("Table does not exist.\n");
-        return;
     }
 
     Table* table = tableList[args->tableName];
@@ -151,20 +169,14 @@ void Executor::executeSelect(selectStatement* args){
     }
     print("\n" + std::string(40, '-') + "\n", 0);
 
-    void* page = table->pager->getPage(0);
-    if(!page){
-        throw std::runtime_error("Failed to read page from database disk memory.\n");
-    }
-
-    char* pageBytes = static_cast<char*>(page);
-
-    for(uint32_t r = 0; r < table->numRows; r++){
-        char* rowSlot = pageBytes + (r * table->rowSize);
+    for(Cursor cursor = tableStart(table); !cursor.EOT; cursorNext(&cursor)){
+        void* page = nullptr;
+        void* rowSlot = getCursorValue(&cursor, &page);
 
         for(size_t i = 0; i < table->orderedCol.size(); i++){
-            std::string colName = table->orderedCol[i];
+            const std::string& colName = table->orderedCol[i];
             colInfo* col = table->lookup.at(colName);
-            void* fieldAddr = rowSlot + col->offset;
+            void* fieldAddr = static_cast<char*>(rowSlot) + col->offset;
 
             if(col->type == INT){
                 int32_t v;
@@ -183,9 +195,9 @@ void Executor::executeSelect(selectStatement* args){
             if(i < table->orderedCol.size() - 1) print(" | ", 0);
         }
         print("\n", 0);
-    }
 
-    std::free(page);
+        std::free(page);
+    }
 }
 
 void Executor::shutdown(){

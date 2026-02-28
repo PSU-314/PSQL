@@ -3,15 +3,16 @@
 #include "../include/parser.h"
 #include "../include/executor.h"
 #include <stdexcept>
+#include <cstdlib>
 
 static Executor E;
 
 static std::string trimString(const std::string& s){
-    int a = s.find_first_not_of(" \t\r\n");
+    std::string::size_type a = s.find_first_not_of(" \t\r\n");
     if(a == std::string::npos) return "";
-    int b = s.find_last_not_of(" \t\r\n");
-    std::string r = s.substr(a, b-a+1);
-    std::transform(r.begin(), r.end(), r.begin(), tolower);
+    std::string::size_type b = s.find_last_not_of(" \t\r\n");
+    std::string r = s.substr(a, b - a + 1);
+    std::transform(r.begin(), r.end(), r.begin(), ::tolower);
     return r;
 }
 
@@ -31,6 +32,8 @@ bool input(std::string& buffer){
 
 void processInput(std::string& buffer){
     std::string cmd = trimString(buffer);
+    
+    if(cmd.empty()) return;
 
     if(cmd[0] == '.'){
         handleMetaCommand(cmd);

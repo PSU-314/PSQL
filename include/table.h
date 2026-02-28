@@ -3,13 +3,14 @@
 
 #include "pager.h"
 #include "parser.h"
+#include <cstdint>
 #include <string>
 #include <vector>
 #include <unordered_map>
 
 const uint32_t SIZE_INT = 4;
 const uint32_t SIZE_FLOAT = 4;
-const uint32_t SIZE_CHAR = 1;
+const uint32_t SIZE_CHAR = 2;
 const uint32_t SIZE_STRING = 255;
 
 struct colInfo{
@@ -26,6 +27,8 @@ public:
     Pager* pager;
     uint32_t rowSize;
     uint32_t numRows;
+    uint32_t rootPageNum;
+    
     std::vector<std::string> orderedCol;
     std::unordered_map<std::string, colInfo*> lookup;
 
