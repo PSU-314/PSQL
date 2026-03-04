@@ -43,7 +43,7 @@ struct createStatement : public statement{
 
 struct insertStatement : public statement{
     std::string tableName;
-    std::vector<std::string> values;
+    std::vector<Token> values;
 };
 
 struct selectStatement : public statement{

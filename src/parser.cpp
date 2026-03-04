@@ -40,7 +40,6 @@ void Parser::handleCreate(const std::vector<Token>& tokens, psqlStatement& stmt)
         throw std::runtime_error("Wrong create statement syntax.\n");
     }
 
-
     while(cursor(tokens).type != SEMIC){
         if(cursor(tokens).type == RPARA){
             move(tokens);
@@ -74,7 +73,6 @@ void Parser::handleCreate(const std::vector<Token>& tokens, psqlStatement& stmt)
                     throw std::runtime_error("Keyword 'primary_key' is mentioned more than once for a column.\n");
                 }
             }
-
             else if(cursor(tokens).value == "not_null"){
                 if(f3){
                     f3 = false;
@@ -84,7 +82,6 @@ void Parser::handleCreate(const std::vector<Token>& tokens, psqlStatement& stmt)
                     throw std::runtime_error("Keyword 'not_null' is mentioned more than once for a column.\n");
                 }
             }
-
             else{
                 std::string t = cursor(tokens).value;
                 if(!f1){
@@ -149,11 +146,15 @@ void Parser::handleInsert(const std::vector<Token>& tokens, psqlStatement& stmt)
 
     while(cursor(tokens).type != RPARA && cursor(tokens).type != SEMIC){
         TOKEN_ID t = cursor(tokens).type;
+        
+        // Enforce basic literal types
         if(t != INT_LIT && t != FLOAT_LIT && t != STRING_LIT && t != CHAR_LIT && t != IDENTIFIER){
-            throw std::runtime_error("Invalid literal value in insert list.\n");
+            if (!(t == KEYWORD && cursor(tokens).value == "null")) {
+                throw std::runtime_error("Invalid literal value in insert list.\n");
+            }
         }
         
-        args->values.push_back(cursor(tokens).value);
+        args->values.push_back(cursor(tokens));
         move(tokens);
 
         if(cursor(tokens).type == COMMA){

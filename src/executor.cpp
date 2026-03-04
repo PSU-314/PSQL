@@ -63,7 +63,6 @@ void Executor::executeCreate(createStatement* args){
     }
 
     tableList[args->tableName] = newTable;
-
     catalog.saveCatalog(tableList);
 
     print("Table '" + args->tableName + "' created.\n", 0);
@@ -85,18 +84,42 @@ void Executor::executeInsert(insertStatement* args){
 
     std::vector<char> rowBuf(table->rowSize, 0);
     char* rowSlot = rowBuf.data();
+    
+    uint32_t btreeKey = table->numRows;
+    bool hasIntPK = false;
 
+    // Data Processing and NULL validation
     for(size_t i = 0; i < table->orderedCol.size(); i++){
         const std::string& colName = table->orderedCol[i];
         colInfo* col = table->lookup[colName];
-        const std::string& rawVal = args->values[i];
+        
+        Token token = args->values[i];
+        const std::string& rawVal = token.value;
 
         char* writeDest = rowSlot + col->offset;
+        
+        // Null parsing & enforcement
+        if(token.type == KEYWORD && rawVal == "null"){
+            if(!col->canHoldNull){
+                throw std::runtime_error("Constraint Violated: Column '" + colName + "' cannot be null.\n");
+            }
+            if(col->isPrimary){
+                throw std::runtime_error("Constraint Violated: Primary key column '" + colName + "' cannot be null.\n");
+            }
+            std::memset(writeDest, 0, col->size);
+            continue;
+        }
 
         if(col->type == INT){
             try{
                 int val = std::stoi(rawVal);
                 std::memcpy(writeDest, &val, col->size);
+                
+                // If it is an INT PK, use it as the B-Tree Key
+                if (col->isPrimary) {
+                    hasIntPK = true;
+                    btreeKey = static_cast<uint32_t>(val);
+                }
             }
             catch(const std::invalid_argument&){
                 throw std::runtime_error("Expected integer for column '" + colName + "'.\n");
@@ -126,24 +149,59 @@ void Executor::executeInsert(insertStatement* args){
             }
         }
     }
+    
+    // Enforce Primary Key Uniqueness
+    int pkIndex = -1;
+    for(size_t i = 0; i < table->orderedCol.size(); i++){
+        if(table->lookup[table->orderedCol[i]]->isPrimary){
+            pkIndex = static_cast<int>(i);
+            break;
+        }
+    }
 
-    uint32_t key = table->numRows;
-    Cursor cursor = tableFind(table, key);
+    if(hasIntPK){
+        Cursor cursor = tableFind(table, btreeKey);
+        if(!cursor.EOT){
+            void* existingPage = table->pager->getPage(cursor.pageNum);
+            bool duplicate = (cursor.cellNum < *leafNodeNumCells(existingPage)) &&
+                             (*leafNodeKey(existingPage, cursor.cellNum, table->rowSize) == btreeKey);
+            std::free(existingPage);
+            if(duplicate){
+                throw std::runtime_error("Constraint Violated: Duplicate primary key value: " + std::to_string(btreeKey) + ".\n");
+            }
+        }
+    } 
+    else if(pkIndex != -1){
+        colInfo* pkCol = table->lookup[table->orderedCol[pkIndex]];
+        for(Cursor scan = tableStart(table); !scan.EOT; cursorNext(&scan)){
+            void* page = nullptr;
+            void* existingRow = getCursorValue(&scan, &page);
+            
+            if(std::memcmp(static_cast<char*>(existingRow) + pkCol->offset, 
+                            rowSlot + pkCol->offset, pkCol->size) == 0){
+                std::free(page);
+                throw std::runtime_error("Constraint Violated: Duplicate primary key value.\n");
+            }
+            std::free(page);
+        }
+    }
+
+    // Final B-Tree leaf insertion
+    Cursor cursor = tableFind(table, btreeKey);
 
     if(!cursor.EOT){
         void* existingPage = table->pager->getPage(cursor.pageNum);
         bool duplicate = (cursor.cellNum < *leafNodeNumCells(existingPage)) &&
-                          (*leafNodeKey(existingPage, cursor.cellNum, table->rowSize) == key);
+                          (*leafNodeKey(existingPage, cursor.cellNum, table->rowSize) == btreeKey);
         std::free(existingPage);
         if(duplicate){
-            throw std::runtime_error("Internal error: duplicate row key " + std::to_string(key) + ".\n");
+            throw std::runtime_error("Internal error: duplicate row key " + std::to_string(btreeKey) + ".\n");
         }
     }
 
-    insert_leaf_node(&cursor, key, rowSlot);
+    insert_leaf_node(&cursor, btreeKey, rowSlot);
 
     table->numRows++;
-
     catalog.saveCatalog(tableList);
 
     print("Inserted a row.\n", 0);
