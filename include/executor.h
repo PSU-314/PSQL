@@ -13,6 +13,7 @@ private:
     void executeCreate(createStatement* args);
     void executeInsert(insertStatement* args);
     void executeSelect(selectStatement* args);
+    void executeDrop(dropStatement* args);
 
 public:
     Executor();

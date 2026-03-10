@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <vector>
 #include <algorithm>
+#include <filesystem>
 
 static Catalog catalog("catalog.meta", "data");
 
@@ -31,6 +32,9 @@ void Executor::execute(psqlStatement& stmt){
     }
     else if(stmt.type == C_SELECT){
         executeSelect(static_cast<selectStatement*>(stmt.args.get()));
+    }
+    else if(stmt.type == C_DROP){
+        executeDrop(static_cast<dropStatement*>(stmt.args.get()));
     }
 }
 
@@ -256,6 +260,26 @@ void Executor::executeSelect(selectStatement* args){
 
         std::free(page);
     }
+}
+
+void Executor::executeDrop(dropStatement* args){
+    if(!args) return;
+
+    auto it = tableList.find(args->tableName);
+    if(it == tableList.end()){
+        throw std::runtime_error("Table '" + args->tableName + "' does not exist.\n");
+    }
+
+    Table* table = it->second;
+    
+    std::string dbFilePath = "data/" + table->name + ".db";
+
+    tableList.erase(it);
+    delete table;
+    std::filesystem::remove(dbFilePath);
+    catalog.saveCatalog(tableList);
+    
+    print("Table '" + args->tableName + "' dropped successfully.\n", 0);
 }
 
 void Executor::shutdown(){

@@ -208,6 +208,31 @@ void Parser::handleSelect(const std::vector<Token>& tokens, psqlStatement& stmt)
     stmt.args = std::move(args);
 }
 
+void Parser::handleDrop(const std::vector<Token>& tokens, psqlStatement& stmt){
+    move(tokens);
+
+    if(cursor(tokens).type != KEYWORD || cursor(tokens).value != "table"){
+        throw std::runtime_error("Expected 'table' keyword after 'drop'.\n");
+    }
+    move(tokens);
+
+    if(cursor(tokens).type != IDENTIFIER){
+        throw std::runtime_error("Missing table name.\n");
+    }
+
+    auto args = std::make_unique<dropStatement>();
+    args->tableName = cursor(tokens).value;
+    move(tokens);
+
+    if(cursor(tokens).type != SEMIC){
+        throw std::runtime_error("Missing trailing semicolon ';'.\n");
+    }
+    move(tokens);
+
+    stmt.type = C_DROP;
+    stmt.args = std::move(args);
+}
+
 Parser::Parser(){
     current = 0;
 }
@@ -217,6 +242,8 @@ void Parser::parse(std::vector<Token> tokens, psqlStatement& stmt){
         if(cursor(tokens).value == "create") handleCreate(tokens, stmt);
         else if(cursor(tokens).value == "insert") handleInsert(tokens, stmt);
         else if(cursor(tokens).value == "select") handleSelect(tokens, stmt);
+        else if(cursor(tokens).value == "drop") handleDrop(tokens, stmt);
+        else throw std::runtime_error(cursor(tokens).value + " is not an operation.\n");
     }
     else{
         throw std::runtime_error(cursor(tokens).value + " is not an operation.\n");
