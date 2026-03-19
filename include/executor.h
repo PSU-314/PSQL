@@ -14,6 +14,7 @@ private:
     void executeInsert(insertStatement* args);
     void executeSelect(selectStatement* args);
     void executeDrop(dropStatement* args);
+    void executeUpdate(updateStatement* args);
 
 public:
     Executor();

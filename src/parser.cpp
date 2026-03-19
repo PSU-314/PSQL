@@ -233,6 +233,69 @@ void Parser::handleDrop(const std::vector<Token>& tokens, psqlStatement& stmt){
     stmt.args = std::move(args);
 }
 
+void Parser::handleUpdate(const std::vector<Token>& tokens, psqlStatement& stmt){
+    move(tokens);
+
+    if(cursor(tokens).type != IDENTIFIER){
+        throw std::runtime_error("Missing table name.\n");
+    }
+    
+    auto args = std::make_unique<updateStatement>();
+    args->tableName = cursor(tokens).value;
+    move(tokens);
+
+    if(cursor(tokens).type != KEYWORD || cursor(tokens).value != "set"){
+        throw std::runtime_error("Expected 'set' keyword.\n");
+    }
+    move(tokens);
+
+    while(cursor(tokens).type != SEMIC && cursor(tokens).value != "where"){
+        if(cursor(tokens).type != IDENTIFIER) throw std::runtime_error("Expected column name in SET clause.\n");
+        std::string colName = cursor(tokens).value;
+        move(tokens);
+
+        if(cursor(tokens).type != SYMBOL || cursor(tokens).value != "=") throw std::runtime_error("Expected '=' after column name.\n");
+        move(tokens);
+
+        Token val = cursor(tokens);
+        if(val.type != INT_LIT && val.type != FLOAT_LIT && val.type != STRING_LIT && 
+            val.type != CHAR_LIT && val.type != IDENTIFIER && !(val.type == KEYWORD && val.value == "null")){
+            throw std::runtime_error("Invalid value in set clause.\n");
+        }
+        
+        args->updates.push_back({colName, val});
+        move(tokens);
+
+        if(cursor(tokens).type == COMMA){
+            move(tokens);
+        } else if(cursor(tokens).type != SEMIC && cursor(tokens).value != "where"){
+            throw std::runtime_error("Expected ',' or 'where' or ';'.\n");
+        }
+    }
+
+    if(cursor(tokens).type == KEYWORD && cursor(tokens).value == "where"){
+        args->hasWhere = true;
+        move(tokens);
+        
+        if(cursor(tokens).type != IDENTIFIER) throw std::runtime_error("Expected column name after where.\n");
+        args->whereCol = cursor(tokens).value;
+        move(tokens);
+
+        if(cursor(tokens).type != SYMBOL || cursor(tokens).value != "=") throw std::runtime_error("Expected '=' in where clause.\n");
+        move(tokens);
+
+        args->whereVal = cursor(tokens);
+        move(tokens);
+    }
+
+    if(cursor(tokens).type != SEMIC){
+        throw std::runtime_error("Missing trailing semicolon ';'.\n");
+    }
+
+    stmt.type = C_UPDATE;
+    stmt.args = std::move(args);
+}
+
 Parser::Parser(){
     current = 0;
 }
@@ -243,6 +306,7 @@ void Parser::parse(std::vector<Token> tokens, psqlStatement& stmt){
         else if(cursor(tokens).value == "insert") handleInsert(tokens, stmt);
         else if(cursor(tokens).value == "select") handleSelect(tokens, stmt);
         else if(cursor(tokens).value == "drop") handleDrop(tokens, stmt);
+        else if(cursor(tokens).value == "update") handleUpdate(tokens, stmt);
         else throw std::runtime_error(cursor(tokens).value + " is not an operation.\n");
     }
     else{

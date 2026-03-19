@@ -14,7 +14,7 @@ enum Type{
     NONE
 };
 
-enum Commands{C_CREATE, C_INSERT, C_SELECT, C_DROP};
+enum Commands{C_CREATE, C_INSERT, C_SELECT, C_DROP, C_UPDATE};
 
 struct Item{
     Type type;
@@ -54,6 +54,19 @@ struct dropStatement : public statement{
     std::string tableName;
 };
 
+struct setClause{
+    std::string colName;
+    Token value;
+};
+
+struct updateStatement : public statement{
+    std::string tableName;
+    std::vector<setClause> updates;
+    bool hasWhere = false;
+    std::string whereCol;
+    Token whereVal;
+};
+
 struct psqlStatement{
     Commands type;
     std::unique_ptr<statement> args;
@@ -70,6 +83,7 @@ private:
     void handleInsert(const std::vector<Token>&, psqlStatement& );
     void handleSelect(const std::vector<Token>&, psqlStatement& );
     void handleDrop(const std::vector<Token>&, psqlStatement& );
+    void handleUpdate(const std::vector<Token>&, psqlStatement& );
 
 public:
     Parser();

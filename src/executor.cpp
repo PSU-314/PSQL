@@ -36,6 +36,9 @@ void Executor::execute(psqlStatement& stmt){
     else if(stmt.type == C_DROP){
         executeDrop(static_cast<dropStatement*>(stmt.args.get()));
     }
+    else if(stmt.type == C_UPDATE){
+        executeUpdate(static_cast<updateStatement*>(stmt.args.get())); // Add this route
+    }
 }
 
 void Executor::executeCreate(createStatement* args){
@@ -278,8 +281,97 @@ void Executor::executeDrop(dropStatement* args){
     delete table;
     std::filesystem::remove(dbFilePath);
     catalog.saveCatalog(tableList);
-    
+
     print("Table '" + args->tableName + "' dropped successfully.\n", 0);
+}
+
+void Executor::executeUpdate(updateStatement* args){
+    if(!args) return;
+
+    if(tableList.find(args->tableName) == tableList.end()){
+        throw std::runtime_error("Table '" + args->tableName + "' does not exist.\n");
+    }
+
+    Table* table = tableList[args->tableName];
+
+    for(const auto& u : args->updates){
+        if(table->lookup.find(u.colName) == table->lookup.end()){
+            throw std::runtime_error("Column not found: " + u.colName + "\n");
+        }
+        if(table->lookup[u.colName]->isPrimary){
+            throw std::runtime_error("Constraint Violated: Updating primary key column '" + u.colName + "' is not supported.\n");
+        }
+    }
+    
+    if(args->hasWhere && table->lookup.find(args->whereCol) == table->lookup.end()){
+        throw std::runtime_error("Where column not found: " + args->whereCol + "\n");
+    }
+
+    int updatedRows = 0;
+    
+    for(Cursor scan = tableStart(table); !scan.EOT; cursorNext(&scan)){
+        void* page = nullptr;
+        void* rowSlot = getCursorValue(&scan, &page);
+        bool match = true;
+
+        if(args->hasWhere){
+            colInfo* wCol = table->lookup[args->whereCol];
+            void* fieldAddr = static_cast<char*>(rowSlot) + wCol->offset;
+            const std::string& rawVal = args->whereVal.value;
+
+            if(wCol->type == INT){
+                int32_t v;
+                std::memcpy(&v, fieldAddr, wCol->size);
+                if(v != std::stoi(rawVal)) match = false;
+            } 
+            else if(wCol->type == FLOAT){
+                float v;
+                std::memcpy(&v, fieldAddr, wCol->size);
+                if(v != std::stof(rawVal)) match = false;
+            } 
+            else {
+                std::string vStr(static_cast<char*>(fieldAddr));
+                if(vStr != rawVal) match = false;
+            }
+        }
+
+        if(match){
+            for(const auto& u : args->updates){
+                colInfo* sCol = table->lookup[u.colName];
+                void* writeDest = static_cast<char*>(rowSlot) + sCol->offset;
+                const std::string& rawVal = u.value.value;
+
+                if(u.value.type == KEYWORD && rawVal == "null"){
+                    if(!sCol->canHoldNull) {
+                        std::free(page);
+                        throw std::runtime_error("Constraint Violated: Column '" + u.colName + "' cannot be null.\n");
+                    }
+                    std::memset(writeDest, 0, sCol->size);
+                } 
+                else if(sCol->type == INT){
+                    int val = std::stoi(rawVal);
+                    std::memcpy(writeDest, &val, sCol->size);
+                } 
+                else if(sCol->type == FLOAT){
+                    float val = std::stof(rawVal);
+                    std::memcpy(writeDest, &val, sCol->size);
+                } 
+                else {
+                    std::memset(writeDest, 0, sCol->size);
+                    if(sCol->size > 0){
+                        size_t copyLen = std::min(rawVal.size(), static_cast<size_t>(sCol->size - 1));
+                        std::memcpy(writeDest, rawVal.data(), copyLen);
+                    }
+                }
+            }
+            
+            table->pager->setPage(scan.pageNum, page);
+            updatedRows++;
+        }
+        std::free(page);
+    }
+    
+    print("Updated " + std::to_string(updatedRows) + " row(s).\n", 0);
 }
 
 void Executor::shutdown(){
