@@ -29,7 +29,7 @@ Table::~Table(){
 }
 
 void Table::calculateRowLayout(){
-    uint32_t currentOffset = 0;
+    uint32_t currentOffset = VALID_BIT_SIZE;
 
     for(const std::string& colName : orderedCol){
         colInfo* col = lookup[colName];
@@ -56,7 +56,7 @@ void Table::calculateRowLayout(){
     }
     rowSize = currentOffset;
     
-    if(rowSize == 0){
+    if(rowSize == VALID_BIT_SIZE){
         throw std::runtime_error("Table '" + name + "' has zero-width rows (no columns).\n");
     }
     if(rowSize > LEAF_NODE_VALUE_SIZE_MAX){

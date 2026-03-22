@@ -12,6 +12,16 @@ const uint32_t SIZE_INT = 4;
 const uint32_t SIZE_FLOAT = 4;
 const uint32_t SIZE_CHAR = 2;
 const uint32_t SIZE_STRING = 255;
+const uint32_t VALID_BIT_SIZE = 1;
+const uint32_t VALID_BIT_OFFSET = 0;
+
+inline bool isRowValid(const void* rowSlot){
+    return *(reinterpret_cast<const uint8_t*>(rowSlot) + VALID_BIT_OFFSET) != 0;
+}
+
+inline void setRowValid(void* rowSlot, bool valid){
+    *(reinterpret_cast<uint8_t*>(rowSlot) + VALID_BIT_OFFSET) = valid ? 1 : 0;
+}
 
 struct colInfo{
     Type type;

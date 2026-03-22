@@ -15,6 +15,7 @@ private:
     void executeSelect(selectStatement* args);
     void executeDrop(dropStatement* args);
     void executeUpdate(updateStatement* args);
+    void executeDelete(deleteStatement* args);
 
 public:
     Executor();

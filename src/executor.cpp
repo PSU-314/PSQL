@@ -37,7 +37,10 @@ void Executor::execute(psqlStatement& stmt){
         executeDrop(static_cast<dropStatement*>(stmt.args.get()));
     }
     else if(stmt.type == C_UPDATE){
-        executeUpdate(static_cast<updateStatement*>(stmt.args.get())); // Add this route
+        executeUpdate(static_cast<updateStatement*>(stmt.args.get()));
+    }
+    else if(stmt.type == C_DELETE){
+        executeDelete(static_cast<deleteStatement*>(stmt.args.get()));
     }
 }
 
@@ -91,6 +94,8 @@ void Executor::executeInsert(insertStatement* args){
 
     std::vector<char> rowBuf(table->rowSize, 0);
     char* rowSlot = rowBuf.data();
+    
+    setRowValid(rowSlot, true);
     
     uint32_t btreeKey = table->numRows;
     bool hasIntPK = false;
@@ -170,12 +175,32 @@ void Executor::executeInsert(insertStatement* args){
         Cursor cursor = tableFind(table, btreeKey);
         if(!cursor.EOT){
             void* existingPage = table->pager->getPage(cursor.pageNum);
-            bool duplicate = (cursor.cellNum < *leafNodeNumCells(existingPage)) &&
+            bool cellExists = (cursor.cellNum < *leafNodeNumCells(existingPage)) &&
                              (*leafNodeKey(existingPage, cursor.cellNum, table->rowSize) == btreeKey);
-            std::free(existingPage);
-            if(duplicate){
-                throw std::runtime_error("Constraint Violated: Duplicate primary key value: " + std::to_string(btreeKey) + ".\n");
+
+            if(cellExists){
+                void* existingRow = leafNodeValue(existingPage, cursor.cellNum, table->rowSize);
+
+                if(isRowValid(existingRow)){
+                    // A live row already occupies this key: genuine duplicate.
+                    std::free(existingPage);
+                    throw std::runtime_error("Constraint Violated: Duplicate primary key value: " + std::to_string(btreeKey) + ".\n");
+                }
+
+                // The cell exists but its row was soft-deleted: reuse the
+                // slot by overwriting its row data in place and marking it
+                // valid again, rather than inserting a new leaf cell. This
+                // lets the same primary key be reused after a delete.
+                std::memcpy(existingRow, rowSlot, table->rowSize);
+                table->pager->setPage(cursor.pageNum, existingPage);
+                std::free(existingPage);
+
+                table->numRows++;
+                catalog.saveCatalog(tableList);
+                print("Inserted a row.\n", 0);
+                return;
             }
+            std::free(existingPage);
         }
     } 
     else if(pkIndex != -1){
@@ -183,6 +208,12 @@ void Executor::executeInsert(insertStatement* args){
         for(Cursor scan = tableStart(table); !scan.EOT; cursorNext(&scan)){
             void* page = nullptr;
             void* existingRow = getCursorValue(&scan, &page);
+
+            // Deleted rows don't participate in uniqueness checks.
+            if(!isRowValid(existingRow)){
+                std::free(page);
+                continue;
+            }
             
             if(std::memcmp(static_cast<char*>(existingRow) + pkCol->offset, 
                             rowSlot + pkCol->offset, pkCol->size) == 0){
@@ -234,9 +265,19 @@ void Executor::executeSelect(selectStatement* args){
     }
     print("\n" + std::string(40, '-') + "\n", 0);
 
+    bool printedAny = false;
+
     for(Cursor cursor = tableStart(table); !cursor.EOT; cursorNext(&cursor)){
         void* page = nullptr;
         void* rowSlot = getCursorValue(&cursor, &page);
+
+        // Skip soft-deleted rows entirely; they are not part of any result.
+        if(!isRowValid(rowSlot)){
+            std::free(page);
+            continue;
+        }
+
+        printedAny = true;
 
         for(size_t i = 0; i < table->orderedCol.size(); i++){
             const std::string& colName = table->orderedCol[i];
@@ -262,6 +303,10 @@ void Executor::executeSelect(selectStatement* args){
         print("\n", 0);
 
         std::free(page);
+    }
+
+    if(!printedAny){
+        print("No rows selected.\n", 0);
     }
 }
 
@@ -312,6 +357,13 @@ void Executor::executeUpdate(updateStatement* args){
     for(Cursor scan = tableStart(table); !scan.EOT; cursorNext(&scan)){
         void* page = nullptr;
         void* rowSlot = getCursorValue(&scan, &page);
+
+        // Soft-deleted rows are invisible to UPDATE as well.
+        if(!isRowValid(rowSlot)){
+            std::free(page);
+            continue;
+        }
+
         bool match = true;
 
         if(args->hasWhere){
@@ -372,6 +424,64 @@ void Executor::executeUpdate(updateStatement* args){
     }
     
     print("Updated " + std::to_string(updatedRows) + " row(s).\n", 0);
+}
+
+void Executor::executeDelete(deleteStatement* args){
+    if(!args) return;
+
+    if(tableList.find(args->tableName) == tableList.end()){
+        throw std::runtime_error("Table '" + args->tableName + "' does not exist.\n");
+    }
+
+    Table* table = tableList[args->tableName];
+
+    if(args->hasWhere && table->lookup.find(args->whereCol) == table->lookup.end()){
+        throw std::runtime_error("Where column not found: " + args->whereCol + "\n");
+    }
+
+    int deletedRows = 0;
+
+    for(Cursor scan = tableStart(table); !scan.EOT; cursorNext(&scan)){
+        void* page = nullptr;
+        void* rowSlot = getCursorValue(&scan, &page);
+
+        if(!isRowValid(rowSlot)){
+            std::free(page);
+            continue;
+        }
+
+        bool match = true;
+
+        if(args->hasWhere){
+            colInfo* wCol = table->lookup[args->whereCol];
+            void* fieldAddr = static_cast<char*>(rowSlot) + wCol->offset;
+            const std::string& rawVal = args->whereVal.value;
+
+            if(wCol->type == INT){
+                int32_t v;
+                std::memcpy(&v, fieldAddr, wCol->size);
+                if(v != std::stoi(rawVal)) match = false;
+            }
+            else if(wCol->type == FLOAT){
+                float v;
+                std::memcpy(&v, fieldAddr, wCol->size);
+                if(v != std::stof(rawVal)) match = false;
+            }
+            else{
+                std::string vStr(static_cast<char*>(fieldAddr));
+                if(vStr != rawVal) match = false;
+            }
+        }
+
+        if(match){
+            setRowValid(rowSlot, false);
+            table->pager->setPage(scan.pageNum, page);
+            deletedRows++;
+        }
+        std::free(page);
+    }
+
+    print("Deleted " + std::to_string(deletedRows) + " row(s).\n", 0);
 }
 
 void Executor::shutdown(){
