@@ -48,6 +48,11 @@ struct insertStatement : public statement{
 
 struct selectStatement : public statement{
     std::string tableName;
+    bool selectAll = true;
+    std::vector<std::string> columns;
+    bool hasWhere = false;
+    std::string whereCol;
+    Token whereVal;
 };
 
 struct dropStatement : public statement{

@@ -94,7 +94,7 @@ void Executor::executeInsert(insertStatement* args){
 
     std::vector<char> rowBuf(table->rowSize, 0);
     char* rowSlot = rowBuf.data();
-    
+
     setRowValid(rowSlot, true);
     
     uint32_t btreeKey = table->numRows;
@@ -254,14 +254,32 @@ void Executor::executeSelect(selectStatement* args){
 
     Table* table = tableList[args->tableName];
 
+    // Resolve which columns to print
+    std::vector<std::string> outCols;
+    if(args->selectAll){
+        outCols = table->orderedCol;
+    }
+    else{
+        for(const std::string& c : args->columns){
+            if(table->lookup.find(c) == table->lookup.end()){
+                throw std::runtime_error("Column not found: " + c + "\n");
+            }
+            outCols.push_back(c);
+        }
+    }
+
+    if(args->hasWhere && table->lookup.find(args->whereCol) == table->lookup.end()){
+        throw std::runtime_error("Where column not found: " + args->whereCol + "\n");
+    }
+
     if(table->numRows == 0){
         print("No rows selected.\n", 0);
         return;
     }
 
-    for(size_t i = 0; i < table->orderedCol.size(); i++){
-        std::cout << table->orderedCol[i];
-        if(i < table->orderedCol.size() - 1) std::cout << " | ";
+    for(size_t i = 0; i < outCols.size(); i++){
+        std::cout << outCols[i];
+        if(i < outCols.size() - 1) std::cout << " | ";
     }
     print("\n" + std::string(40, '-') + "\n", 0);
 
@@ -271,16 +289,47 @@ void Executor::executeSelect(selectStatement* args){
         void* page = nullptr;
         void* rowSlot = getCursorValue(&cursor, &page);
 
-        // Skip soft-deleted rows entirely; they are not part of any result.
         if(!isRowValid(rowSlot)){
+            std::free(page);
+            continue;
+        }
+
+        bool match = true;
+
+        if(args->hasWhere){
+            colInfo* wCol = table->lookup[args->whereCol];
+            void* fieldAddr = static_cast<char*>(rowSlot) + wCol->offset;
+            const std::string& rawVal = args->whereVal.value;
+
+            if(wCol->type == INT){
+                int32_t v;
+                std::memcpy(&v, fieldAddr, wCol->size);
+                try{
+                    if(v != std::stoi(rawVal)) match = false;
+                } catch(...){ match = false; }
+            }
+            else if(wCol->type == FLOAT){
+                float v;
+                std::memcpy(&v, fieldAddr, wCol->size);
+                try{
+                    if(v != std::stof(rawVal)) match = false;
+                } catch(...){ match = false; }
+            }
+            else{
+                std::string vStr(static_cast<char*>(fieldAddr));
+                if(vStr != rawVal) match = false;
+            }
+        }
+
+        if(!match){
             std::free(page);
             continue;
         }
 
         printedAny = true;
 
-        for(size_t i = 0; i < table->orderedCol.size(); i++){
-            const std::string& colName = table->orderedCol[i];
+        for(size_t i = 0; i < outCols.size(); i++){
+            const std::string& colName = outCols[i];
             colInfo* col = table->lookup.at(colName);
             void* fieldAddr = static_cast<char*>(rowSlot) + col->offset;
 
@@ -293,12 +342,12 @@ void Executor::executeSelect(selectStatement* args){
                 float v;
                 std::memcpy(&v, fieldAddr, col->size);
                 print(std::to_string(v), 0);
-            } 
+            }
             else{
                 print(static_cast<char*>(fieldAddr), 0);
             }
 
-            if(i < table->orderedCol.size() - 1) print(" | ", 0);
+            if(i < outCols.size() - 1) print(" | ", 0);
         }
         print("\n", 0);
 

@@ -182,10 +182,29 @@ void Parser::handleInsert(const std::vector<Token>& tokens, psqlStatement& stmt)
 void Parser::handleSelect(const std::vector<Token>& tokens, psqlStatement& stmt){
     move(tokens);
 
-    if(cursor(tokens).type != SYMBOL || cursor(tokens).value != "*"){
-        throw std::runtime_error("Expected '*' after select.\n");
+    auto args = std::make_unique<selectStatement>();
+
+    if(cursor(tokens).type == SYMBOL && cursor(tokens).value == "*"){
+        args->selectAll = true;
+        move(tokens);
     }
-    move(tokens);
+    else if(cursor(tokens).type == IDENTIFIER){
+        args->selectAll = false;
+        args->columns.push_back(cursor(tokens).value);
+        move(tokens);
+
+        while(cursor(tokens).type == COMMA){
+            move(tokens);
+            if(cursor(tokens).type != IDENTIFIER){
+                throw std::runtime_error("Expected column name after ','.\n");
+            }
+            args->columns.push_back(cursor(tokens).value);
+            move(tokens);
+        }
+    }
+    else{
+        throw std::runtime_error("Expected '*' or column list after select.\n");
+    }
 
     if(cursor(tokens).type != KEYWORD || cursor(tokens).value != "from"){
         throw std::runtime_error("Expected 'from' keyword.\n");
@@ -195,14 +214,33 @@ void Parser::handleSelect(const std::vector<Token>& tokens, psqlStatement& stmt)
     if(cursor(tokens).type != IDENTIFIER){
         throw std::runtime_error("Missing table name.\n");
     }
-
-    auto args = std::make_unique<selectStatement>();
     args->tableName = cursor(tokens).value;
     move(tokens);
+
+    if(cursor(tokens).type == KEYWORD && cursor(tokens).value == "where"){
+        args->hasWhere = true;
+        move(tokens);
+
+        if(cursor(tokens).type != IDENTIFIER) throw std::runtime_error("Expected column name after where.\n");
+        args->whereCol = cursor(tokens).value;
+        move(tokens);
+
+        if(cursor(tokens).type != SYMBOL || cursor(tokens).value != "=") throw std::runtime_error("Expected '=' in where clause.\n");
+        move(tokens);
+
+        Token val = cursor(tokens);
+        if(val.type != INT_LIT && val.type != FLOAT_LIT && val.type != STRING_LIT &&
+            val.type != CHAR_LIT && val.type != IDENTIFIER){
+            throw std::runtime_error("Invalid value in where clause.\n");
+        }
+        args->whereVal = val;
+        move(tokens);
+    }
 
     if(cursor(tokens).type != SEMIC){
         throw std::runtime_error("Missing trailing semicolon ';'.\n");
     }
+    move(tokens);
 
     stmt.type = C_SELECT;
     stmt.args = std::move(args);
