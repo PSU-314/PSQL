@@ -12,12 +12,16 @@ Table::Table(const std::string& tableName, const std::string& dbFileName, const 
     pager = new Pager(dbFileName, dir);
 
     if(pager->getFileLength() == 0){
+        pager->beginTransaction();  // Ensure WAL captures the initial root node
+        
         void* rootNode = std::malloc(PAGE_SIZE);
         std::memset(rootNode, 0, PAGE_SIZE);
         initializeLeafNode(rootNode);
         set_node_root(rootNode, true);
         pager->setPage(rootPageNum, rootNode);
         std::free(rootNode);
+        
+        pager->commitTransaction(); // Push to DB
     }
 }
 

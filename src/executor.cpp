@@ -104,20 +104,13 @@ void Executor::executeInsert(insertStatement* args){
     for(size_t i = 0; i < table->orderedCol.size(); i++){
         const std::string& colName = table->orderedCol[i];
         colInfo* col = table->lookup[colName];
-        
         Token token = args->values[i];
         const std::string& rawVal = token.value;
-
         char* writeDest = rowSlot + col->offset;
         
-        // Null parsing & enforcement
         if(token.type == KEYWORD && rawVal == "null"){
-            if(!col->canHoldNull){
-                throw std::runtime_error("Constraint Violated: Column '" + colName + "' cannot be null.\n");
-            }
-            if(col->isPrimary){
-                throw std::runtime_error("Constraint Violated: Primary key column '" + colName + "' cannot be null.\n");
-            }
+            if(!col->canHoldNull) throw std::runtime_error("Constraint Violated: Column '" + colName + "' cannot be null.\n");
+            if(col->isPrimary) throw std::runtime_error("Constraint Violated: Primary key column '" + colName + "' cannot be null.\n");
             std::memset(writeDest, 0, col->size);
             continue;
         }
@@ -126,33 +119,19 @@ void Executor::executeInsert(insertStatement* args){
             try{
                 int val = std::stoi(rawVal);
                 std::memcpy(writeDest, &val, col->size);
-                
-                // If it is an INT PK, use it as the B-Tree Key
                 if (col->isPrimary) {
                     hasIntPK = true;
                     btreeKey = static_cast<uint32_t>(val);
                 }
-            }
-            catch(const std::invalid_argument&){
-                throw std::runtime_error("Expected integer for column '" + colName + "'.\n");
-            }
-            catch(const std::out_of_range&){
-                throw std::runtime_error("Integer out of range for column '" + colName + "'.\n");
-            }
-        } 
-        else if(col->type == FLOAT){
+            } catch(const std::invalid_argument&){ throw std::runtime_error("Expected integer for column '" + colName + "'.\n");
+            } catch(const std::out_of_range&){ throw std::runtime_error("Integer out of range for column '" + colName + "'.\n"); }
+        } else if(col->type == FLOAT){
             try{
                 float val = std::stof(rawVal);
                 std::memcpy(writeDest, &val, col->size);
-            }
-            catch(const std::invalid_argument&){
-                throw std::runtime_error("Expected float for column '" + colName + "'.\n");
-            }
-            catch(const std::out_of_range&){
-                throw std::runtime_error("Float out of range for column '" + colName + "'.\n");
-            }
-        } 
-        else if(col->type == CHAR || col->type == STRING){
+            } catch(const std::invalid_argument&){ throw std::runtime_error("Expected float for column '" + colName + "'.\n");
+            } catch(const std::out_of_range&){ throw std::runtime_error("Float out of range for column '" + colName + "'.\n"); }
+        } else if(col->type == CHAR || col->type == STRING){
             std::memset(writeDest, 0, col->size);
             if(col->size > 0){
                 size_t copyLen = std::min(rawVal.size(), static_cast<size_t>(col->size - 1));
@@ -162,7 +141,6 @@ void Executor::executeInsert(insertStatement* args){
         }
     }
     
-    // Enforce Primary Key Uniqueness
     int pkIndex = -1;
     for(size_t i = 0; i < table->orderedCol.size(); i++){
         if(table->lookup[table->orderedCol[i]]->isPrimary){
@@ -171,78 +149,78 @@ void Executor::executeInsert(insertStatement* args){
         }
     }
 
-    if(hasIntPK){
+    uint32_t originalNumRows = table->numRows;
+    table->pager->beginTransaction(); // BEGIN TRANSACTION
+
+    try{
+        if(hasIntPK){
+            Cursor cursor = tableFind(table, btreeKey);
+            if(!cursor.EOT){
+                void* existingPage = table->pager->getPage(cursor.pageNum);
+                bool cellExists = (cursor.cellNum < *leafNodeNumCells(existingPage)) &&
+                                 (*leafNodeKey(existingPage, cursor.cellNum, table->rowSize) == btreeKey);
+
+                if(cellExists){
+                    void* existingRow = leafNodeValue(existingPage, cursor.cellNum, table->rowSize);
+                    if(isRowValid(existingRow)){
+                        std::free(existingPage);
+                        throw std::runtime_error("Constraint Violated: Duplicate primary key value: " + std::to_string(btreeKey) + ".\n");
+                    }
+                    std::memcpy(existingRow, rowSlot, table->rowSize);
+                    table->pager->setPage(cursor.pageNum, existingPage);
+                    std::free(existingPage);
+
+                    table->numRows++;
+                    catalog.saveCatalog(tableList);
+                    table->pager->commitTransaction(); // COMMIT EARLY EXIT
+                    print("Inserted a row.\n", 0);
+                    return;
+                }
+                std::free(existingPage);
+            }
+        } 
+        else if(pkIndex != -1){
+            colInfo* pkCol = table->lookup[table->orderedCol[pkIndex]];
+            for(Cursor scan = tableStart(table); !scan.EOT; cursorNext(&scan)){
+                void* page = nullptr;
+                void* existingRow = getCursorValue(&scan, &page);
+                if(!isRowValid(existingRow)){
+                    std::free(page);
+                    continue;
+                }
+                if(std::memcmp(static_cast<char*>(existingRow) + pkCol->offset, 
+                                rowSlot + pkCol->offset, pkCol->size) == 0){
+                    std::free(page);
+                    throw std::runtime_error("Constraint Violated: Duplicate primary key value.\n");
+                }
+                std::free(page);
+            }
+        }
+
         Cursor cursor = tableFind(table, btreeKey);
         if(!cursor.EOT){
             void* existingPage = table->pager->getPage(cursor.pageNum);
-            bool cellExists = (cursor.cellNum < *leafNodeNumCells(existingPage)) &&
-                             (*leafNodeKey(existingPage, cursor.cellNum, table->rowSize) == btreeKey);
-
-            if(cellExists){
-                void* existingRow = leafNodeValue(existingPage, cursor.cellNum, table->rowSize);
-
-                if(isRowValid(existingRow)){
-                    // A live row already occupies this key: genuine duplicate.
-                    std::free(existingPage);
-                    throw std::runtime_error("Constraint Violated: Duplicate primary key value: " + std::to_string(btreeKey) + ".\n");
-                }
-
-                // The cell exists but its row was soft-deleted: reuse the
-                // slot by overwriting its row data in place and marking it
-                // valid again, rather than inserting a new leaf cell. This
-                // lets the same primary key be reused after a delete.
-                std::memcpy(existingRow, rowSlot, table->rowSize);
-                table->pager->setPage(cursor.pageNum, existingPage);
-                std::free(existingPage);
-
-                table->numRows++;
-                catalog.saveCatalog(tableList);
-                print("Inserted a row.\n", 0);
-                return;
-            }
+            bool duplicate = (cursor.cellNum < *leafNodeNumCells(existingPage)) &&
+                              (*leafNodeKey(existingPage, cursor.cellNum, table->rowSize) == btreeKey);
             std::free(existingPage);
+            if(duplicate) throw std::runtime_error("Internal error: duplicate row key " + std::to_string(btreeKey) + ".\n");
         }
-    } 
-    else if(pkIndex != -1){
-        colInfo* pkCol = table->lookup[table->orderedCol[pkIndex]];
-        for(Cursor scan = tableStart(table); !scan.EOT; cursorNext(&scan)){
-            void* page = nullptr;
-            void* existingRow = getCursorValue(&scan, &page);
 
-            // Deleted rows don't participate in uniqueness checks.
-            if(!isRowValid(existingRow)){
-                std::free(page);
-                continue;
-            }
-            
-            if(std::memcmp(static_cast<char*>(existingRow) + pkCol->offset, 
-                            rowSlot + pkCol->offset, pkCol->size) == 0){
-                std::free(page);
-                throw std::runtime_error("Constraint Violated: Duplicate primary key value.\n");
-            }
-            std::free(page);
-        }
+        insert_leaf_node(&cursor, btreeKey, rowSlot);
+
+        table->numRows++;
+        catalog.saveCatalog(tableList);
+        table->pager->commitTransaction(); // COMMIT END
+        
+        print("Inserted a row.\n", 0);
+        
     }
-
-    // Final B-Tree leaf insertion
-    Cursor cursor = tableFind(table, btreeKey);
-
-    if(!cursor.EOT){
-        void* existingPage = table->pager->getPage(cursor.pageNum);
-        bool duplicate = (cursor.cellNum < *leafNodeNumCells(existingPage)) &&
-                          (*leafNodeKey(existingPage, cursor.cellNum, table->rowSize) == btreeKey);
-        std::free(existingPage);
-        if(duplicate){
-            throw std::runtime_error("Internal error: duplicate row key " + std::to_string(btreeKey) + ".\n");
-        }
+    catch(...){
+        table->numRows = originalNumRows;
+        catalog.saveCatalog(tableList); 
+        table->pager->rollbackTransaction(); // ROLLBACK ON ERROR
+        throw;
     }
-
-    insert_leaf_node(&cursor, btreeKey, rowSlot);
-
-    table->numRows++;
-    catalog.saveCatalog(tableList);
-
-    print("Inserted a row.\n", 0);
 }
 
 void Executor::executeSelect(selectStatement* args){
@@ -361,19 +339,18 @@ void Executor::executeSelect(selectStatement* args){
 
 void Executor::executeDrop(dropStatement* args){
     if(!args) return;
-
     auto it = tableList.find(args->tableName);
     if(it == tableList.end()){
         throw std::runtime_error("Table '" + args->tableName + "' does not exist.\n");
     }
 
     Table* table = it->second;
-    
     std::string dbFilePath = "data/" + table->name + ".db";
 
     tableList.erase(it);
     delete table;
     std::filesystem::remove(dbFilePath);
+    std::filesystem::remove(dbFilePath + ".wal"); // Also drop the WAL
     catalog.saveCatalog(tableList);
 
     print("Table '" + args->tableName + "' dropped successfully.\n", 0);
@@ -381,13 +358,11 @@ void Executor::executeDrop(dropStatement* args){
 
 void Executor::executeUpdate(updateStatement* args){
     if(!args) return;
-
     if(tableList.find(args->tableName) == tableList.end()){
         throw std::runtime_error("Table '" + args->tableName + "' does not exist.\n");
     }
 
     Table* table = tableList[args->tableName];
-
     for(const auto& u : args->updates){
         if(table->lookup.find(u.colName) == table->lookup.end()){
             throw std::runtime_error("Column not found: " + u.colName + "\n");
@@ -403,134 +378,141 @@ void Executor::executeUpdate(updateStatement* args){
 
     int updatedRows = 0;
     
-    for(Cursor scan = tableStart(table); !scan.EOT; cursorNext(&scan)){
-        void* page = nullptr;
-        void* rowSlot = getCursorValue(&scan, &page);
+    table->pager->beginTransaction(); // BEGIN TRANSACTION
+    try{
+        for(Cursor scan = tableStart(table); !scan.EOT; cursorNext(&scan)){
+            void* page = nullptr;
+            void* rowSlot = getCursorValue(&scan, &page);
 
-        // Soft-deleted rows are invisible to UPDATE as well.
-        if(!isRowValid(rowSlot)){
-            std::free(page);
-            continue;
-        }
-
-        bool match = true;
-
-        if(args->hasWhere){
-            colInfo* wCol = table->lookup[args->whereCol];
-            void* fieldAddr = static_cast<char*>(rowSlot) + wCol->offset;
-            const std::string& rawVal = args->whereVal.value;
-
-            if(wCol->type == INT){
-                int32_t v;
-                std::memcpy(&v, fieldAddr, wCol->size);
-                if(v != std::stoi(rawVal)) match = false;
-            } 
-            else if(wCol->type == FLOAT){
-                float v;
-                std::memcpy(&v, fieldAddr, wCol->size);
-                if(v != std::stof(rawVal)) match = false;
-            } 
-            else {
-                std::string vStr(static_cast<char*>(fieldAddr));
-                if(vStr != rawVal) match = false;
+            if(!isRowValid(rowSlot)){
+                std::free(page);
+                continue;
             }
-        }
 
-        if(match){
-            for(const auto& u : args->updates){
-                colInfo* sCol = table->lookup[u.colName];
-                void* writeDest = static_cast<char*>(rowSlot) + sCol->offset;
-                const std::string& rawVal = u.value.value;
+            bool match = true;
+            if(args->hasWhere){
+                colInfo* wCol = table->lookup[args->whereCol];
+                void* fieldAddr = static_cast<char*>(rowSlot) + wCol->offset;
+                const std::string& rawVal = args->whereVal.value;
 
-                if(u.value.type == KEYWORD && rawVal == "null"){
-                    if(!sCol->canHoldNull) {
-                        std::free(page);
-                        throw std::runtime_error("Constraint Violated: Column '" + u.colName + "' cannot be null.\n");
-                    }
-                    std::memset(writeDest, 0, sCol->size);
-                } 
-                else if(sCol->type == INT){
-                    int val = std::stoi(rawVal);
-                    std::memcpy(writeDest, &val, sCol->size);
-                } 
-                else if(sCol->type == FLOAT){
-                    float val = std::stof(rawVal);
-                    std::memcpy(writeDest, &val, sCol->size);
-                } 
-                else {
-                    std::memset(writeDest, 0, sCol->size);
-                    if(sCol->size > 0){
-                        size_t copyLen = std::min(rawVal.size(), static_cast<size_t>(sCol->size - 1));
-                        std::memcpy(writeDest, rawVal.data(), copyLen);
-                    }
+                if(wCol->type == INT){
+                    int32_t v;
+                    std::memcpy(&v, fieldAddr, wCol->size);
+                    if(v != std::stoi(rawVal)) match = false;
+                } else if(wCol->type == FLOAT){
+                    float v;
+                    std::memcpy(&v, fieldAddr, wCol->size);
+                    if(v != std::stof(rawVal)) match = false;
+                } else {
+                    std::string vStr(static_cast<char*>(fieldAddr));
+                    if(vStr != rawVal) match = false;
                 }
             }
-            
-            table->pager->setPage(scan.pageNum, page);
-            updatedRows++;
+
+            if(match){
+                for(const auto& u : args->updates){
+                    colInfo* sCol = table->lookup[u.colName];
+                    void* writeDest = static_cast<char*>(rowSlot) + sCol->offset;
+                    const std::string& rawVal = u.value.value;
+
+                    if(u.value.type == KEYWORD && rawVal == "null"){
+                        if(!sCol->canHoldNull) {
+                            std::free(page);
+                            throw std::runtime_error("Constraint Violated: Column '" + u.colName + "' cannot be null.\n");
+                        }
+                        std::memset(writeDest, 0, sCol->size);
+                    } else if(sCol->type == INT){
+                        int val = std::stoi(rawVal);
+                        std::memcpy(writeDest, &val, sCol->size);
+                    } else if(sCol->type == FLOAT){
+                        float val = std::stof(rawVal);
+                        std::memcpy(writeDest, &val, sCol->size);
+                    } else {
+                        std::memset(writeDest, 0, sCol->size);
+                        if(sCol->size > 0){
+                            size_t copyLen = std::min(rawVal.size(), static_cast<size_t>(sCol->size - 1));
+                            std::memcpy(writeDest, rawVal.data(), copyLen);
+                        }
+                    }
+                }
+                table->pager->setPage(scan.pageNum, page);
+                updatedRows++;
+            }
+            std::free(page);
         }
-        std::free(page);
+        
+        table->pager->commitTransaction(); // COMMIT END
+        print("Updated " + std::to_string(updatedRows) + " row(s).\n", 0);
+        
     }
-    
-    print("Updated " + std::to_string(updatedRows) + " row(s).\n", 0);
+    catch(...){
+        table->pager->rollbackTransaction(); // ROLLBACK ON ERROR
+        throw;
+    }
 }
 
 void Executor::executeDelete(deleteStatement* args){
     if(!args) return;
-
     if(tableList.find(args->tableName) == tableList.end()){
         throw std::runtime_error("Table '" + args->tableName + "' does not exist.\n");
     }
 
     Table* table = tableList[args->tableName];
-
     if(args->hasWhere && table->lookup.find(args->whereCol) == table->lookup.end()){
         throw std::runtime_error("Where column not found: " + args->whereCol + "\n");
     }
 
     int deletedRows = 0;
+    
+    table->pager->beginTransaction(); // BEGIN TRANSACTION
+    try{
+        for(Cursor scan = tableStart(table); !scan.EOT; cursorNext(&scan)){
+            void* page = nullptr;
+            void* rowSlot = getCursorValue(&scan, &page);
 
-    for(Cursor scan = tableStart(table); !scan.EOT; cursorNext(&scan)){
-        void* page = nullptr;
-        void* rowSlot = getCursorValue(&scan, &page);
+            if(!isRowValid(rowSlot)){
+                std::free(page);
+                continue;
+            }
 
-        if(!isRowValid(rowSlot)){
+            bool match = true;
+            if(args->hasWhere){
+                colInfo* wCol = table->lookup[args->whereCol];
+                void* fieldAddr = static_cast<char*>(rowSlot) + wCol->offset;
+                const std::string& rawVal = args->whereVal.value;
+
+                if(wCol->type == INT){
+                    int32_t v;
+                    std::memcpy(&v, fieldAddr, wCol->size);
+                    if(v != std::stoi(rawVal)) match = false;
+                }
+                else if(wCol->type == FLOAT){
+                    float v;
+                    std::memcpy(&v, fieldAddr, wCol->size);
+                    if(v != std::stof(rawVal)) match = false;
+                }
+                else{
+                    std::string vStr(static_cast<char*>(fieldAddr));
+                    if(vStr != rawVal) match = false;
+                }
+            }
+
+            if(match){
+                setRowValid(rowSlot, false);
+                table->pager->setPage(scan.pageNum, page);
+                deletedRows++;
+            }
             std::free(page);
-            continue;
         }
-
-        bool match = true;
-
-        if(args->hasWhere){
-            colInfo* wCol = table->lookup[args->whereCol];
-            void* fieldAddr = static_cast<char*>(rowSlot) + wCol->offset;
-            const std::string& rawVal = args->whereVal.value;
-
-            if(wCol->type == INT){
-                int32_t v;
-                std::memcpy(&v, fieldAddr, wCol->size);
-                if(v != std::stoi(rawVal)) match = false;
-            }
-            else if(wCol->type == FLOAT){
-                float v;
-                std::memcpy(&v, fieldAddr, wCol->size);
-                if(v != std::stof(rawVal)) match = false;
-            }
-            else{
-                std::string vStr(static_cast<char*>(fieldAddr));
-                if(vStr != rawVal) match = false;
-            }
-        }
-
-        if(match){
-            setRowValid(rowSlot, false);
-            table->pager->setPage(scan.pageNum, page);
-            deletedRows++;
-        }
-        std::free(page);
+        
+        table->pager->commitTransaction(); // COMMIT END
+        print("Deleted " + std::to_string(deletedRows) + " row(s).\n", 0);
+        
     }
-
-    print("Deleted " + std::to_string(deletedRows) + " row(s).\n", 0);
+    catch(...){
+        table->pager->rollbackTransaction(); // ROLLBACK ON ERROR
+        throw;
+    }
 }
 
 void Executor::shutdown(){
