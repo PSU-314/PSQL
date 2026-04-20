@@ -23,14 +23,14 @@ inline Cursor tableStart(Table* table){
 
     while(get_node_type(node) == NodeType::INTERNAL){
         uint32_t childPageNum = *internal_node_child(node, 0);
-        std::free(node);
+        table->pager->unpinPage(pageNum, false);
         pageNum = childPageNum;
         node = table->pager->getPage(pageNum);
     }
 
     cursor.pageNum = pageNum;
     cursor.cellNum = 0;
-    std::free(node);
+    table->pager->unpinPage(pageNum, false);
     return cursor;
 }
 
@@ -45,20 +45,21 @@ inline Cursor getTableEnd(Table* table){
 
     while(get_node_type(node) == NodeType::INTERNAL){
         uint32_t childPageNum = *internal_node_right_child(node);
-        std::free(node);
+        table->pager->unpinPage(pageNum, false);
         pageNum = childPageNum;
         node = table->pager->getPage(pageNum);
     }
 
     cursor.pageNum = pageNum;
     cursor.cellNum = *leafNodeNumCells(node);  // one past last cell
-    std::free(node);
+    table->pager->unpinPage(pageNum, false);
     return cursor;
 }
 
 // Follow next_leaf pointer at end of each leaf
 inline void cursorNext(Cursor* cursor){
-    void* node = cursor->table->pager->getPage(cursor->pageNum);
+    uint32_t currentPageNum = cursor->pageNum;
+    void* node = cursor->table->pager->getPage(currentPageNum);
     cursor->cellNum++;
 
     if(cursor->cellNum >= *leafNodeNumCells(node)){
@@ -71,7 +72,7 @@ inline void cursorNext(Cursor* cursor){
             cursor->cellNum = 0;
         }
     }
-    std::free(node);
+    cursor->table->pager->unpinPage(currentPageNum, false);
 }
 
 inline void* getCursorValue(Cursor* cursor, void** outPage){

@@ -1,7 +1,5 @@
 #include "../include/table.h"
 #include "../include/node.h"
-#include <cstdlib>
-#include <cstring>
 #include <stdexcept>
 
 Table::Table(const std::string& tableName, const std::string& dbFileName, const std::string& dir){
@@ -12,15 +10,13 @@ Table::Table(const std::string& tableName, const std::string& dbFileName, const 
     pager = new Pager(dbFileName, dir);
 
     if(pager->getFileLength() == 0){
-        pager->beginTransaction();  // Ensure WAL captures the initial root node
-        
-        void* rootNode = std::malloc(PAGE_SIZE);
-        std::memset(rootNode, 0, PAGE_SIZE);
+        pager->beginTransaction();
+
+        void* rootNode = pager->getPage(rootPageNum); // zero-filled page from pool
         initializeLeafNode(rootNode);
         set_node_root(rootNode, true);
-        pager->setPage(rootPageNum, rootNode);
-        std::free(rootNode);
-        
+        pager->unpinPage(rootPageNum, true);
+
         pager->commitTransaction(); // Push to DB
     }
 }
@@ -53,13 +49,13 @@ void Table::calculateRowLayout(){
                 col->size = SIZE_STRING;
                 break;
             default:
-                col->size = SIZE_INT; 
+                col->size = SIZE_INT;
                 break;
         }
         currentOffset += col->size;
     }
     rowSize = currentOffset;
-    
+
     if(rowSize == VALID_BIT_SIZE){
         throw std::runtime_error("Table '" + name + "' has zero-width rows (no columns).\n");
     }

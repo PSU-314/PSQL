@@ -1,6 +1,5 @@
 #include "../include/btree.h"
 #include "../include/node.h"
-#include <cstdlib>
 #include <cstring>
 
 // Internal (file-local) helpers
@@ -60,16 +59,13 @@ static void create_new_root(Table* table, uint32_t right_child_page_num){
             uint32_t childPageNum = *internal_node_child(left_child, i);
             void* child = table->pager->getPage(childPageNum);
             *node_parent(child) = left_child_page_num;
-            table->pager->setPage(childPageNum, child);
-            std::free(child);
+            table->pager->unpinPage(childPageNum, true);
         }
         uint32_t rightChildPageNum = *internal_node_right_child(left_child);
         void* child = table->pager->getPage(rightChildPageNum);
         *node_parent(child) = left_child_page_num;
-        table->pager->setPage(rightChildPageNum, child);
-        std::free(child);
+        table->pager->unpinPage(rightChildPageNum, true);
     }
-    table->pager->setPage(left_child_page_num, left_child);
 
     initialize_internal_node(root);
     set_node_root(root, true);
@@ -81,12 +77,9 @@ static void create_new_root(Table* table, uint32_t right_child_page_num){
     *node_parent(left_child) = table->rootPageNum;
     *node_parent(right_child) = table->rootPageNum;
 
-    table->pager->setPage(table->rootPageNum, root);
-    table->pager->setPage(right_child_page_num, right_child);
-
-    std::free(root);
-    std::free(right_child);
-    std::free(left_child);
+    table->pager->unpinPage(table->rootPageNum, true);
+    table->pager->unpinPage(right_child_page_num, true);
+    table->pager->unpinPage(left_child_page_num, true);
 }
 
 // Internal node insert / split
@@ -99,8 +92,8 @@ static void internal_node_insert(Table* table, uint32_t parent_page_num, uint32_
     uint32_t original_num_keys = *internal_node_num_keys(parent);
 
     if(original_num_keys >= INTERNAL_NODE_MAX_CELLS){
-        std::free(parent);
-        std::free(child);
+        table->pager->unpinPage(parent_page_num, false);
+        table->pager->unpinPage(child_page_num, false);
         split_internal_node(table, parent_page_num, child_page_num);
         return;
     }
@@ -110,10 +103,8 @@ static void internal_node_insert(Table* table, uint32_t parent_page_num, uint32_
     if(right_child_page_num == INVALID_PAGE_NUM){
         *internal_node_right_child(parent) = child_page_num;
         *node_parent(child) = parent_page_num;
-        table->pager->setPage(parent_page_num, parent);
-        table->pager->setPage(child_page_num, child);
-        std::free(parent);
-        std::free(child);
+        table->pager->unpinPage(parent_page_num, true);
+        table->pager->unpinPage(child_page_num, true);
         return;
     }
 
@@ -137,12 +128,9 @@ static void internal_node_insert(Table* table, uint32_t parent_page_num, uint32_
 
     *node_parent(child) = parent_page_num;
 
-    table->pager->setPage(parent_page_num, parent);
-    table->pager->setPage(child_page_num, child);
-
-    std::free(parent);
-    std::free(child);
-    std::free(right_child);
+    table->pager->unpinPage(parent_page_num, true);
+    table->pager->unpinPage(child_page_num, true);
+    table->pager->unpinPage(right_child_page_num, false);
 }
 
 static void split_internal_node(Table* table, uint32_t old_page_num, uint32_t child_page_num){
@@ -152,7 +140,7 @@ static void split_internal_node(Table* table, uint32_t old_page_num, uint32_t ch
 
     void* child_probe = table->pager->getPage(child_page_num);
     uint32_t child_max = get_node_max_key(table->pager, child_probe, table->rowSize);
-    std::free(child_probe);
+    table->pager->unpinPage(child_page_num, false);
 
     uint32_t new_page_num = get_unused_page_num(table);
     uint32_t parent_page_num;
@@ -160,17 +148,15 @@ static void split_internal_node(Table* table, uint32_t old_page_num, uint32_t ch
     if(splitting_root){
         void* new_sibling = table->pager->getPage(new_page_num);
         initialize_internal_node(new_sibling);
-        table->pager->setPage(new_page_num, new_sibling);
-        std::free(new_sibling);
+        table->pager->unpinPage(new_page_num, true);
 
-        table->pager->setPage(old_page_num, old_node);
-        std::free(old_node);
+        table->pager->unpinPage(old_page_num, false);
 
         create_new_root(table, new_page_num);
 
         void* newRoot = table->pager->getPage(table->rootPageNum);
         old_page_num = *internal_node_child(newRoot, 0);
-        std::free(newRoot);
+        table->pager->unpinPage(table->rootPageNum, false);
 
         old_node = table->pager->getPage(old_page_num);
         parent_page_num = table->rootPageNum;
@@ -180,8 +166,7 @@ static void split_internal_node(Table* table, uint32_t old_page_num, uint32_t ch
 
         void* new_node = table->pager->getPage(new_page_num);
         initialize_internal_node(new_node);
-        table->pager->setPage(new_page_num, new_node);
-        std::free(new_node);
+        table->pager->unpinPage(new_page_num, true);
     }
 
     uint32_t num_keys = *internal_node_num_keys(old_node);
@@ -190,8 +175,7 @@ static void split_internal_node(Table* table, uint32_t old_page_num, uint32_t ch
     uint32_t cur_page_num = *internal_node_right_child(old_node);
     void* cur = table->pager->getPage(cur_page_num);
     *node_parent(cur) = new_page_num;
-    table->pager->setPage(cur_page_num, cur);
-    std::free(cur);
+    table->pager->unpinPage(cur_page_num, true);
     internal_node_insert(table, new_page_num, cur_page_num);
     *internal_node_right_child(old_node) = INVALID_PAGE_NUM;
 
@@ -201,8 +185,7 @@ static void split_internal_node(Table* table, uint32_t old_page_num, uint32_t ch
         cur_page_num = *internal_node_child(old_node, static_cast<uint32_t>(i));
         cur = table->pager->getPage(cur_page_num);
         *node_parent(cur) = new_page_num;
-        table->pager->setPage(cur_page_num, cur);
-        std::free(cur);
+        table->pager->unpinPage(cur_page_num, true);
 
         internal_node_insert(table, new_page_num, cur_page_num);
 
@@ -215,25 +198,22 @@ static void split_internal_node(Table* table, uint32_t old_page_num, uint32_t ch
     num_keys--;
     *internal_node_num_keys(old_node) = num_keys;
 
-    table->pager->setPage(old_page_num, old_node);
     uint32_t max_after_split = get_node_max_key(table->pager, old_node, table->rowSize);
-    std::free(old_node);
+    table->pager->unpinPage(old_page_num, true);
 
     uint32_t destination_page_num = (child_max < max_after_split) ? old_page_num : new_page_num;
     internal_node_insert(table, destination_page_num, child_page_num);
 
     void* child = table->pager->getPage(child_page_num);
     *node_parent(child) = destination_page_num;
-    table->pager->setPage(child_page_num, child);
-    std::free(child);
+    table->pager->unpinPage(child_page_num, true);
 
     void* parent = table->pager->getPage(parent_page_num);
     void* refreshedOld = table->pager->getPage(old_page_num);
     uint32_t refreshedOldMax = get_node_max_key(table->pager, refreshedOld, table->rowSize);
-    std::free(refreshedOld);
+    table->pager->unpinPage(old_page_num, false);
     update_internal_node_key(parent, old_max, refreshedOldMax);
-    table->pager->setPage(parent_page_num, parent);
-    std::free(parent);
+    table->pager->unpinPage(parent_page_num, true);
 
     if(!splitting_root){
         internal_node_insert(table, parent_page_num, new_page_num);
@@ -270,13 +250,13 @@ Cursor tableFind(Table* table, uint32_t key){
     while(get_node_type(node) == NodeType::INTERNAL){
         uint32_t childIndex = internal_node_find_child(node, key);
         uint32_t childPageNum = *internal_node_child(node, childIndex);
-        std::free(node);
+        table->pager->unpinPage(pageNum, false);
         pageNum = childPageNum;
         node = table->pager->getPage(pageNum);
     }
 
     uint32_t cellNum = leaf_node_find_cell(node, key, table->rowSize);
-    std::free(node);
+    table->pager->unpinPage(pageNum, false);
 
     Cursor cursor;
     cursor.table = table;
@@ -327,24 +307,22 @@ static void split_leaf_node(Cursor* cursor, uint32_t key, const void* rowData){
     *leafNodeNumCells(old_node) = left_count;
     *leafNodeNumCells(new_node) = leaf_node_right_split_count(rowSize);
 
-    table->pager->setPage(old_page_num, old_node);
-    table->pager->setPage(new_page_num, new_node);
+    bool need_new_root = old_node_was_root;
 
-    if(old_node_was_root){
-        std::free(old_node);
-        std::free(new_node);
+    if(need_new_root){
+        table->pager->unpinPage(old_page_num, true);
+        table->pager->unpinPage(new_page_num, true);
         create_new_root(table, new_page_num);
     }
     else{
         uint32_t parent_page_num = *node_parent(old_node);
         uint32_t new_max = get_node_max_key(table->pager, old_node, rowSize);
-        std::free(old_node);
-        std::free(new_node);
+        table->pager->unpinPage(old_page_num, true);
+        table->pager->unpinPage(new_page_num, true);
 
         void* parent = table->pager->getPage(parent_page_num);
         update_internal_node_key(parent, old_max, new_max);
-        table->pager->setPage(parent_page_num, parent);
-        std::free(parent);
+        table->pager->unpinPage(parent_page_num, true);
 
         internal_node_insert(table, parent_page_num, new_page_num);
     }
@@ -357,7 +335,7 @@ void insert_leaf_node(Cursor* cursor, uint32_t key, const void* rowData){
     uint32_t max_cells = leaf_node_max_cells(table->rowSize);
 
     if(num_cells >= max_cells){
-        std::free(node);
+        table->pager->unpinPage(cursor->pageNum, false);
         split_leaf_node(cursor, key, rowData);
         return;
     }
@@ -374,6 +352,5 @@ void insert_leaf_node(Cursor* cursor, uint32_t key, const void* rowData){
     *leafNodeKey(node, cursor->cellNum, table->rowSize) = key;
     std::memcpy(leafNodeValue(node, cursor->cellNum, table->rowSize), rowData, table->rowSize);
 
-    table->pager->setPage(cursor->pageNum, node);
-    std::free(node);
+    table->pager->unpinPage(cursor->pageNum, true);
 }

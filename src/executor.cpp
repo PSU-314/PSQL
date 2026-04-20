@@ -96,18 +96,17 @@ void Executor::executeInsert(insertStatement* args){
     char* rowSlot = rowBuf.data();
 
     setRowValid(rowSlot, true);
-    
+
     uint32_t btreeKey = table->numRows;
     bool hasIntPK = false;
 
-    // Data Processing and NULL validation
     for(size_t i = 0; i < table->orderedCol.size(); i++){
         const std::string& colName = table->orderedCol[i];
         colInfo* col = table->lookup[colName];
         Token token = args->values[i];
         const std::string& rawVal = token.value;
         char* writeDest = rowSlot + col->offset;
-        
+
         if(token.type == KEYWORD && rawVal == "null"){
             if(!col->canHoldNull) throw std::runtime_error("Constraint Violated: Column '" + colName + "' cannot be null.\n");
             if(col->isPrimary) throw std::runtime_error("Constraint Violated: Primary key column '" + colName + "' cannot be null.\n");
@@ -140,7 +139,7 @@ void Executor::executeInsert(insertStatement* args){
             }
         }
     }
-    
+
     int pkIndex = -1;
     for(size_t i = 0; i < table->orderedCol.size(); i++){
         if(table->lookup[table->orderedCol[i]]->isPrimary){
@@ -163,12 +162,11 @@ void Executor::executeInsert(insertStatement* args){
                 if(cellExists){
                     void* existingRow = leafNodeValue(existingPage, cursor.cellNum, table->rowSize);
                     if(isRowValid(existingRow)){
-                        std::free(existingPage);
+                        table->pager->unpinPage(cursor.pageNum, false);
                         throw std::runtime_error("Constraint Violated: Duplicate primary key value: " + std::to_string(btreeKey) + ".\n");
                     }
                     std::memcpy(existingRow, rowSlot, table->rowSize);
-                    table->pager->setPage(cursor.pageNum, existingPage);
-                    std::free(existingPage);
+                    table->pager->unpinPage(cursor.pageNum, true);
 
                     table->numRows++;
                     catalog.saveCatalog(tableList);
@@ -176,24 +174,24 @@ void Executor::executeInsert(insertStatement* args){
                     print("Inserted a row.\n", 0);
                     return;
                 }
-                std::free(existingPage);
+                table->pager->unpinPage(cursor.pageNum, false);
             }
-        } 
+        }
         else if(pkIndex != -1){
             colInfo* pkCol = table->lookup[table->orderedCol[pkIndex]];
             for(Cursor scan = tableStart(table); !scan.EOT; cursorNext(&scan)){
                 void* page = nullptr;
                 void* existingRow = getCursorValue(&scan, &page);
                 if(!isRowValid(existingRow)){
-                    std::free(page);
+                    table->pager->unpinPage(scan.pageNum, false);
                     continue;
                 }
-                if(std::memcmp(static_cast<char*>(existingRow) + pkCol->offset, 
+                if(std::memcmp(static_cast<char*>(existingRow) + pkCol->offset,
                                 rowSlot + pkCol->offset, pkCol->size) == 0){
-                    std::free(page);
+                    table->pager->unpinPage(scan.pageNum, false);
                     throw std::runtime_error("Constraint Violated: Duplicate primary key value.\n");
                 }
-                std::free(page);
+                table->pager->unpinPage(scan.pageNum, false);
             }
         }
 
@@ -202,7 +200,7 @@ void Executor::executeInsert(insertStatement* args){
             void* existingPage = table->pager->getPage(cursor.pageNum);
             bool duplicate = (cursor.cellNum < *leafNodeNumCells(existingPage)) &&
                               (*leafNodeKey(existingPage, cursor.cellNum, table->rowSize) == btreeKey);
-            std::free(existingPage);
+            table->pager->unpinPage(cursor.pageNum, false);
             if(duplicate) throw std::runtime_error("Internal error: duplicate row key " + std::to_string(btreeKey) + ".\n");
         }
 
@@ -211,13 +209,13 @@ void Executor::executeInsert(insertStatement* args){
         table->numRows++;
         catalog.saveCatalog(tableList);
         table->pager->commitTransaction(); // COMMIT END
-        
+
         print("Inserted a row.\n", 0);
-        
+
     }
     catch(...){
         table->numRows = originalNumRows;
-        catalog.saveCatalog(tableList); 
+        catalog.saveCatalog(tableList);
         table->pager->rollbackTransaction(); // ROLLBACK ON ERROR
         throw;
     }
@@ -232,7 +230,6 @@ void Executor::executeSelect(selectStatement* args){
 
     Table* table = tableList[args->tableName];
 
-    // Resolve which columns to print
     std::vector<std::string> outCols;
     if(args->selectAll){
         outCols = table->orderedCol;
@@ -268,7 +265,7 @@ void Executor::executeSelect(selectStatement* args){
         void* rowSlot = getCursorValue(&cursor, &page);
 
         if(!isRowValid(rowSlot)){
-            std::free(page);
+            table->pager->unpinPage(cursor.pageNum, false);
             continue;
         }
 
@@ -300,7 +297,7 @@ void Executor::executeSelect(selectStatement* args){
         }
 
         if(!match){
-            std::free(page);
+            table->pager->unpinPage(cursor.pageNum, false);
             continue;
         }
 
@@ -329,7 +326,7 @@ void Executor::executeSelect(selectStatement* args){
         }
         print("\n", 0);
 
-        std::free(page);
+        table->pager->unpinPage(cursor.pageNum, false);
     }
 
     if(!printedAny){
@@ -350,7 +347,7 @@ void Executor::executeDrop(dropStatement* args){
     tableList.erase(it);
     delete table;
     std::filesystem::remove(dbFilePath);
-    std::filesystem::remove(dbFilePath + ".wal"); // Also drop the WAL
+    std::filesystem::remove(dbFilePath + ".wal");
     catalog.saveCatalog(tableList);
 
     print("Table '" + args->tableName + "' dropped successfully.\n", 0);
@@ -371,13 +368,13 @@ void Executor::executeUpdate(updateStatement* args){
             throw std::runtime_error("Constraint Violated: Updating primary key column '" + u.colName + "' is not supported.\n");
         }
     }
-    
+
     if(args->hasWhere && table->lookup.find(args->whereCol) == table->lookup.end()){
         throw std::runtime_error("Where column not found: " + args->whereCol + "\n");
     }
 
     int updatedRows = 0;
-    
+
     table->pager->beginTransaction(); // BEGIN TRANSACTION
     try{
         for(Cursor scan = tableStart(table); !scan.EOT; cursorNext(&scan)){
@@ -385,7 +382,7 @@ void Executor::executeUpdate(updateStatement* args){
             void* rowSlot = getCursorValue(&scan, &page);
 
             if(!isRowValid(rowSlot)){
-                std::free(page);
+                table->pager->unpinPage(scan.pageNum, false);
                 continue;
             }
 
@@ -409,6 +406,7 @@ void Executor::executeUpdate(updateStatement* args){
                 }
             }
 
+            bool wroteThisRow = false;
             if(match){
                 for(const auto& u : args->updates){
                     colInfo* sCol = table->lookup[u.colName];
@@ -417,7 +415,7 @@ void Executor::executeUpdate(updateStatement* args){
 
                     if(u.value.type == KEYWORD && rawVal == "null"){
                         if(!sCol->canHoldNull) {
-                            std::free(page);
+                            table->pager->unpinPage(scan.pageNum, wroteThisRow);
                             throw std::runtime_error("Constraint Violated: Column '" + u.colName + "' cannot be null.\n");
                         }
                         std::memset(writeDest, 0, sCol->size);
@@ -435,15 +433,15 @@ void Executor::executeUpdate(updateStatement* args){
                         }
                     }
                 }
-                table->pager->setPage(scan.pageNum, page);
+                wroteThisRow = true;
                 updatedRows++;
             }
-            std::free(page);
+            table->pager->unpinPage(scan.pageNum, wroteThisRow);
         }
-        
+
         table->pager->commitTransaction(); // COMMIT END
         print("Updated " + std::to_string(updatedRows) + " row(s).\n", 0);
-        
+
     }
     catch(...){
         table->pager->rollbackTransaction(); // ROLLBACK ON ERROR
@@ -463,7 +461,7 @@ void Executor::executeDelete(deleteStatement* args){
     }
 
     int deletedRows = 0;
-    
+
     table->pager->beginTransaction(); // BEGIN TRANSACTION
     try{
         for(Cursor scan = tableStart(table); !scan.EOT; cursorNext(&scan)){
@@ -471,7 +469,7 @@ void Executor::executeDelete(deleteStatement* args){
             void* rowSlot = getCursorValue(&scan, &page);
 
             if(!isRowValid(rowSlot)){
-                std::free(page);
+                table->pager->unpinPage(scan.pageNum, false);
                 continue;
             }
 
@@ -497,17 +495,18 @@ void Executor::executeDelete(deleteStatement* args){
                 }
             }
 
+            bool wroteThisRow = false;
             if(match){
                 setRowValid(rowSlot, false);
-                table->pager->setPage(scan.pageNum, page);
+                wroteThisRow = true;
                 deletedRows++;
             }
-            std::free(page);
+            table->pager->unpinPage(scan.pageNum, wroteThisRow);
         }
-        
+
         table->pager->commitTransaction(); // COMMIT END
         print("Deleted " + std::to_string(deletedRows) + " row(s).\n", 0);
-        
+
     }
     catch(...){
         table->pager->rollbackTransaction(); // ROLLBACK ON ERROR

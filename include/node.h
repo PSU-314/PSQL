@@ -237,7 +237,7 @@ inline uint32_t get_node_max_key(Pager *pager, void *node, uint32_t rowSize){
   }
   void *right_child = pager->getPage(*internal_node_right_child(node));
   uint32_t result = get_node_max_key(pager, right_child, rowSize);
-  std::free(right_child);
+  pager->unpinPage(*internal_node_right_child(node), false);
   return result;
 }
 
