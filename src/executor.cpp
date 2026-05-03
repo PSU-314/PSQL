@@ -221,6 +221,48 @@ void Executor::executeInsert(insertStatement* args){
     }
 }
 
+static void printRow(void* rowSlot, Table* table, const std::vector<std::string>& outCols){
+    for(size_t i = 0; i < outCols.size(); i++){
+        const std::string& colName = outCols[i];
+        colInfo* col = table->lookup.at(colName);
+        void* fieldAddr = static_cast<char*>(rowSlot) + col->offset;
+
+        if(col->type == INT){
+            int32_t v;
+            std::memcpy(&v, fieldAddr, col->size);
+            print(std::to_string(v), 0);
+        }
+        else if(col->type == FLOAT){
+            float v;
+            std::memcpy(&v, fieldAddr, col->size);
+            print(std::to_string(v), 0);
+        }
+        else{
+            print(static_cast<char*>(fieldAddr), 0);
+        }
+
+        if(i < outCols.size() - 1) print(" | ", 0);
+    }
+    print("\n", 0);
+}
+
+static bool valueMatches(colInfo* wCol, void* fieldAddr, const std::string& rawVal){
+    if(wCol->type == INT){
+        int32_t v;
+        std::memcpy(&v, fieldAddr, wCol->size);
+        try{ return v == std::stoi(rawVal); } catch(...){ return false; }
+    }
+    else if(wCol->type == FLOAT){
+        float v;
+        std::memcpy(&v, fieldAddr, wCol->size);
+        try{ return v == std::stof(rawVal); } catch(...){ return false; }
+    }
+    else{
+        std::string vStr(static_cast<char*>(fieldAddr));
+        return vStr == rawVal;
+    }
+}
+
 void Executor::executeSelect(selectStatement* args){
     if(!args) return;
 
@@ -252,6 +294,20 @@ void Executor::executeSelect(selectStatement* args){
         return;
     }
 
+    colInfo* wColForFastPath = nullptr;
+    bool useIndexLookup = false;
+    int32_t lookupKey = 0;
+
+    if(args->hasWhere){
+        wColForFastPath = table->lookup[args->whereCol];
+        if(wColForFastPath->isPrimary && wColForFastPath->type == INT){
+            try{
+                lookupKey = std::stoi(args->whereVal.value);
+                useIndexLookup = true;
+            } catch(...){ useIndexLookup = false; }
+        }
+    }
+
     for(size_t i = 0; i < outCols.size(); i++){
         std::cout << outCols[i];
         if(i < outCols.size() - 1) std::cout << " | ";
@@ -260,73 +316,52 @@ void Executor::executeSelect(selectStatement* args){
 
     bool printedAny = false;
 
-    for(Cursor cursor = tableStart(table); !cursor.EOT; cursorNext(&cursor)){
-        void* page = nullptr;
-        void* rowSlot = getCursorValue(&cursor, &page);
+    if(useIndexLookup){
+        Cursor cursor = tableFind(table, static_cast<uint32_t>(lookupKey));
 
-        if(!isRowValid(rowSlot)){
+        if(!cursor.EOT){
+            void* page = table->pager->getPage(cursor.pageNum);
+            bool cellExists = (cursor.cellNum < *leafNodeNumCells(page)) &&
+                               (*leafNodeKey(page, cursor.cellNum, table->rowSize) ==
+                                static_cast<uint32_t>(lookupKey));
+
+            if(cellExists){
+                void* rowSlot = leafNodeValue(page, cursor.cellNum, table->rowSize);
+                if(isRowValid(rowSlot)){
+                    printedAny = true;
+                    printRow(rowSlot, table, outCols);
+                }
+            }
             table->pager->unpinPage(cursor.pageNum, false);
-            continue;
         }
+    }
+    else{
+        for(Cursor cursor = tableStart(table); !cursor.EOT; cursorNext(&cursor)){
+            void* page = nullptr;
+            void* rowSlot = getCursorValue(&cursor, &page);
 
-        bool match = true;
-
-        if(args->hasWhere){
-            colInfo* wCol = table->lookup[args->whereCol];
-            void* fieldAddr = static_cast<char*>(rowSlot) + wCol->offset;
-            const std::string& rawVal = args->whereVal.value;
-
-            if(wCol->type == INT){
-                int32_t v;
-                std::memcpy(&v, fieldAddr, wCol->size);
-                try{
-                    if(v != std::stoi(rawVal)) match = false;
-                } catch(...){ match = false; }
+            if(!isRowValid(rowSlot)){
+                table->pager->unpinPage(cursor.pageNum, false);
+                continue;
             }
-            else if(wCol->type == FLOAT){
-                float v;
-                std::memcpy(&v, fieldAddr, wCol->size);
-                try{
-                    if(v != std::stof(rawVal)) match = false;
-                } catch(...){ match = false; }
-            }
-            else{
-                std::string vStr(static_cast<char*>(fieldAddr));
-                if(vStr != rawVal) match = false;
-            }
-        }
 
-        if(!match){
+            bool match = true;
+            if(args->hasWhere){
+                colInfo* wCol = table->lookup[args->whereCol];
+                void* fieldAddr = static_cast<char*>(rowSlot) + wCol->offset;
+                match = valueMatches(wCol, fieldAddr, args->whereVal.value);
+            }
+
+            if(!match){
+                table->pager->unpinPage(cursor.pageNum, false);
+                continue;
+            }
+
+            printedAny = true;
+            printRow(rowSlot, table, outCols);
+
             table->pager->unpinPage(cursor.pageNum, false);
-            continue;
         }
-
-        printedAny = true;
-
-        for(size_t i = 0; i < outCols.size(); i++){
-            const std::string& colName = outCols[i];
-            colInfo* col = table->lookup.at(colName);
-            void* fieldAddr = static_cast<char*>(rowSlot) + col->offset;
-
-            if(col->type == INT){
-                int32_t v;
-                std::memcpy(&v, fieldAddr, col->size);
-                print(std::to_string(v), 0);
-            }
-            else if(col->type == FLOAT){
-                float v;
-                std::memcpy(&v, fieldAddr, col->size);
-                print(std::to_string(v), 0);
-            }
-            else{
-                print(static_cast<char*>(fieldAddr), 0);
-            }
-
-            if(i < outCols.size() - 1) print(" | ", 0);
-        }
-        print("\n", 0);
-
-        table->pager->unpinPage(cursor.pageNum, false);
     }
 
     if(!printedAny){
