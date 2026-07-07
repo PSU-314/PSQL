@@ -1,10 +1,10 @@
 #include "../include/executor.h"
-#include "../include/main.h"
 #include "../include/pager.h"
 #include "../include/catalog.h"
 #include "../include/btree.h"
 #include "../include/cursor.h"
 #include "../include/node.h"
+#include "../include/psql.h"
 #include <stdexcept>
 #include <string>
 #include <cstring>
@@ -23,29 +23,34 @@ Executor::~Executor(){
     shutdown();
 }
 
-void Executor::execute(psqlStatement& stmt){
+ResultSet Executor::execute(psqlStatement& stmt){
     if(stmt.type == C_CREATE){
-        executeCreate(static_cast<createStatement*>(stmt.args.get()));
+        return executeCreate(static_cast<createStatement*>(stmt.args.get()));
     }
     else if(stmt.type == C_INSERT){
-        executeInsert(static_cast<insertStatement*>(stmt.args.get()));
+        return executeInsert(static_cast<insertStatement*>(stmt.args.get()));
     }
     else if(stmt.type == C_SELECT){
-        executeSelect(static_cast<selectStatement*>(stmt.args.get()));
+        return executeSelect(static_cast<selectStatement*>(stmt.args.get()));
     }
     else if(stmt.type == C_DROP){
-        executeDrop(static_cast<dropStatement*>(stmt.args.get()));
+        return executeDrop(static_cast<dropStatement*>(stmt.args.get()));
     }
     else if(stmt.type == C_UPDATE){
-        executeUpdate(static_cast<updateStatement*>(stmt.args.get()));
+        return executeUpdate(static_cast<updateStatement*>(stmt.args.get()));
     }
     else if(stmt.type == C_DELETE){
-        executeDelete(static_cast<deleteStatement*>(stmt.args.get()));
+        return executeDelete(static_cast<deleteStatement*>(stmt.args.get()));
     }
+    
+    ResultSet errorResult;
+    errorResult.success = false;
+    errorResult.errorMessage = "Unknown statement type.";
+    return errorResult;
 }
 
-void Executor::executeCreate(createStatement* args){
-    if(!args) return;
+ResultSet Executor::executeCreate(createStatement* args){
+    if(!args) throw std::runtime_error("Invalid create arguments.");
 
     if(tableList.find(args->tableName) != tableList.end()){
         throw std::runtime_error("Table '" + args->tableName + "' already exists.\n");
@@ -75,11 +80,13 @@ void Executor::executeCreate(createStatement* args){
     tableList[args->tableName] = newTable;
     catalog.saveCatalog(tableList);
 
-    print("Table '" + args->tableName + "' created.\n", 0);
+    ResultSet result;
+    result.success = true;
+    return result;
 }
 
-void Executor::executeInsert(insertStatement* args){
-    if(!args) return;
+ResultSet Executor::executeInsert(insertStatement* args){
+    if(!args) throw std::runtime_error("Invalid insert arguments.");
 
     if(tableList.find(args->tableName) == tableList.end()){
         throw std::runtime_error("Table '" + args->tableName + "' does not exist.\n");
@@ -149,7 +156,7 @@ void Executor::executeInsert(insertStatement* args){
     }
 
     uint32_t originalNumRows = table->numRows;
-    table->pager->beginTransaction(); // BEGIN TRANSACTION
+    table->pager->beginTransaction(); 
 
     try{
         if(hasIntPK){
@@ -170,9 +177,12 @@ void Executor::executeInsert(insertStatement* args){
 
                     table->numRows++;
                     catalog.saveCatalog(tableList);
-                    table->pager->commitTransaction(); // COMMIT EARLY EXIT
-                    print("Inserted a row.\n", 0);
-                    return;
+                    table->pager->commitTransaction(); 
+                    
+                    ResultSet result;
+                    result.success = true;
+                    result.rowsAffected = 1;
+                    return result;
                 }
                 table->pager->unpinPage(cursor.pageNum, false);
             }
@@ -208,20 +218,25 @@ void Executor::executeInsert(insertStatement* args){
 
         table->numRows++;
         catalog.saveCatalog(tableList);
-        table->pager->commitTransaction(); // COMMIT END
+        table->pager->commitTransaction(); 
 
-        print("Inserted a row.\n", 0);
+        ResultSet result;
+        result.success = true;
+        result.rowsAffected = 1;
+        return result;
 
     }
     catch(...){
         table->numRows = originalNumRows;
         catalog.saveCatalog(tableList);
-        table->pager->rollbackTransaction(); // ROLLBACK ON ERROR
+        table->pager->rollbackTransaction(); 
         throw;
     }
 }
 
-static void printRow(void* rowSlot, Table* table, const std::vector<std::string>& outCols){
+// Replaced printRow with extractRow
+static Row extractRow(void* rowSlot, Table* table, const std::vector<std::string>& outCols){
+    Row row;
     for(size_t i = 0; i < outCols.size(); i++){
         const std::string& colName = outCols[i];
         colInfo* col = table->lookup.at(colName);
@@ -230,20 +245,18 @@ static void printRow(void* rowSlot, Table* table, const std::vector<std::string>
         if(col->type == INT){
             int32_t v;
             std::memcpy(&v, fieldAddr, col->size);
-            print(std::to_string(v), 0);
+            row.values.push_back(std::to_string(v));
         }
         else if(col->type == FLOAT){
             float v;
             std::memcpy(&v, fieldAddr, col->size);
-            print(std::to_string(v), 0);
+            row.values.push_back(std::to_string(v));
         }
         else{
-            print(static_cast<char*>(fieldAddr), 0);
+            row.values.push_back(std::string(static_cast<char*>(fieldAddr)));
         }
-
-        if(i < outCols.size() - 1) print(" | ", 0);
     }
-    print("\n", 0);
+    return row;
 }
 
 static bool valueMatches(colInfo* wCol, void* fieldAddr, const std::string& rawVal){
@@ -263,8 +276,8 @@ static bool valueMatches(colInfo* wCol, void* fieldAddr, const std::string& rawV
     }
 }
 
-void Executor::executeSelect(selectStatement* args){
-    if(!args) return;
+ResultSet Executor::executeSelect(selectStatement* args){
+    if(!args) throw std::runtime_error("Invalid select arguments.");
 
     if(tableList.find(args->tableName) == tableList.end()){
         throw std::runtime_error("Table does not exist.\n");
@@ -289,9 +302,12 @@ void Executor::executeSelect(selectStatement* args){
         throw std::runtime_error("Where column not found: " + args->whereCol + "\n");
     }
 
+    ResultSet result;
+    result.success = true;
+    result.headers = outCols;
+
     if(table->numRows == 0){
-        print("No rows selected.\n", 0);
-        return;
+        return result; 
     }
 
     colInfo* wColForFastPath = nullptr;
@@ -308,14 +324,6 @@ void Executor::executeSelect(selectStatement* args){
         }
     }
 
-    for(size_t i = 0; i < outCols.size(); i++){
-        std::cout << outCols[i];
-        if(i < outCols.size() - 1) std::cout << " | ";
-    }
-    print("\n" + std::string(40, '-') + "\n", 0);
-
-    bool printedAny = false;
-
     if(useIndexLookup){
         Cursor cursor = tableFind(table, static_cast<uint32_t>(lookupKey));
 
@@ -328,8 +336,7 @@ void Executor::executeSelect(selectStatement* args){
             if(cellExists){
                 void* rowSlot = leafNodeValue(page, cursor.cellNum, table->rowSize);
                 if(isRowValid(rowSlot)){
-                    printedAny = true;
-                    printRow(rowSlot, table, outCols);
+                    result.rows.push_back(extractRow(rowSlot, table, outCols));
                 }
             }
             table->pager->unpinPage(cursor.pageNum, false);
@@ -357,20 +364,16 @@ void Executor::executeSelect(selectStatement* args){
                 continue;
             }
 
-            printedAny = true;
-            printRow(rowSlot, table, outCols);
-
+            result.rows.push_back(extractRow(rowSlot, table, outCols));
             table->pager->unpinPage(cursor.pageNum, false);
         }
     }
 
-    if(!printedAny){
-        print("No rows selected.\n", 0);
-    }
+    return result;
 }
 
-void Executor::executeDrop(dropStatement* args){
-    if(!args) return;
+ResultSet Executor::executeDrop(dropStatement* args){
+    if(!args) throw std::runtime_error("Invalid drop arguments.");
     auto it = tableList.find(args->tableName);
     if(it == tableList.end()){
         throw std::runtime_error("Table '" + args->tableName + "' does not exist.\n");
@@ -385,11 +388,13 @@ void Executor::executeDrop(dropStatement* args){
     std::filesystem::remove(dbFilePath + ".wal");
     catalog.saveCatalog(tableList);
 
-    print("Table '" + args->tableName + "' dropped successfully.\n", 0);
+    ResultSet result;
+    result.success = true;
+    return result;
 }
 
-void Executor::executeUpdate(updateStatement* args){
-    if(!args) return;
+ResultSet Executor::executeUpdate(updateStatement* args){
+    if(!args) throw std::runtime_error("Invalid update arguments.");
     if(tableList.find(args->tableName) == tableList.end()){
         throw std::runtime_error("Table '" + args->tableName + "' does not exist.\n");
     }
@@ -410,7 +415,7 @@ void Executor::executeUpdate(updateStatement* args){
 
     int updatedRows = 0;
 
-    table->pager->beginTransaction(); // BEGIN TRANSACTION
+    table->pager->beginTransaction(); 
     try{
         for(Cursor scan = tableStart(table); !scan.EOT; cursorNext(&scan)){
             void* page = nullptr;
@@ -474,18 +479,22 @@ void Executor::executeUpdate(updateStatement* args){
             table->pager->unpinPage(scan.pageNum, wroteThisRow);
         }
 
-        table->pager->commitTransaction(); // COMMIT END
-        print("Updated " + std::to_string(updatedRows) + " row(s).\n", 0);
+        table->pager->commitTransaction(); 
+        
+        ResultSet result;
+        result.success = true;
+        result.rowsAffected = updatedRows;
+        return result;
 
     }
     catch(...){
-        table->pager->rollbackTransaction(); // ROLLBACK ON ERROR
+        table->pager->rollbackTransaction(); 
         throw;
     }
 }
 
-void Executor::executeDelete(deleteStatement* args){
-    if(!args) return;
+ResultSet Executor::executeDelete(deleteStatement* args){
+    if(!args) throw std::runtime_error("Invalid delete arguments.");
     if(tableList.find(args->tableName) == tableList.end()){
         throw std::runtime_error("Table '" + args->tableName + "' does not exist.\n");
     }
@@ -497,7 +506,7 @@ void Executor::executeDelete(deleteStatement* args){
 
     int deletedRows = 0;
 
-    table->pager->beginTransaction(); // BEGIN TRANSACTION
+    table->pager->beginTransaction(); 
     try{
         for(Cursor scan = tableStart(table); !scan.EOT; cursorNext(&scan)){
             void* page = nullptr;
@@ -539,12 +548,16 @@ void Executor::executeDelete(deleteStatement* args){
             table->pager->unpinPage(scan.pageNum, wroteThisRow);
         }
 
-        table->pager->commitTransaction(); // COMMIT END
-        print("Deleted " + std::to_string(deletedRows) + " row(s).\n", 0);
+        table->pager->commitTransaction(); 
+        
+        ResultSet result;
+        result.success = true;
+        result.rowsAffected = deletedRows;
+        return result;
 
     }
     catch(...){
-        table->pager->rollbackTransaction(); // ROLLBACK ON ERROR
+        table->pager->rollbackTransaction(); 
         throw;
     }
 }

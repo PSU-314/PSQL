@@ -1,5 +1,4 @@
 #include "../include/catalog.h"
-#include "../include/main.h"
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
@@ -75,5 +74,5 @@ void Catalog::loadCatalog(std::unordered_map<std::string, Table*>& tableList){
         tableList[tableName] = table;
     }
     in.close();
-    print("Database metadata loaded.\n", 0);
+    //print("Database metadata loaded.\n", 0);
 }

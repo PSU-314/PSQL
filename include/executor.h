@@ -2,6 +2,7 @@
 #define EXECUTOR_H
 
 #include "parser.h"
+#include "psql.h"
 #include "table.h"
 #include <unordered_map>
 #include <string>
@@ -10,18 +11,18 @@
 class Executor{
 private:
     std::unordered_map<std::string, Table*> tableList;
-    void executeCreate(createStatement* args);
-    void executeInsert(insertStatement* args);
-    void executeSelect(selectStatement* args);
-    void executeDrop(dropStatement* args);
-    void executeUpdate(updateStatement* args);
-    void executeDelete(deleteStatement* args);
+    ResultSet executeCreate(createStatement* args);
+    ResultSet executeInsert(insertStatement* args);
+    ResultSet executeSelect(selectStatement* args);
+    ResultSet executeDrop(dropStatement* args);
+    ResultSet executeUpdate(updateStatement* args);
+    ResultSet executeDelete(deleteStatement* args);
 
 public:
     Executor();
     ~Executor();
 
-    void execute(psqlStatement& stmt);
+    ResultSet execute(psqlStatement& stmt);
     void shutdown();
 };
 
