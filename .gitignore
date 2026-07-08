@@ -1,4 +1,42 @@
-*.out
-*.db
-obj/
-data/
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.o
+/obj/
+
+# Compiled Main Executable
+/psql
+
+# PSQL generated files
+/data/
+/tests/data/
+/tests/libpsql.a
+/tests/psql.h
+
+# Compiled Test Executables
+/tests/bench_latency_throughput
+/tests/bench_memory
+/tests/bench_mixed_workload
+/tests/bench_scaling
+
+# Benchmark Results
+/tests/results/
+*.csv
+*.txt
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDEs / Editors
+.vscode/
+.idea/
+*.swp
+*~
+compile_commands.json
